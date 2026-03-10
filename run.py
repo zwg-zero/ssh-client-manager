@@ -36,8 +36,10 @@ def main():
         logging.basicConfig(level=logging.DEBUG)
         print("Verbose mode enabled")
 
+    from src import __version__
+
     # Print startup info
-    print("SSH Client Manager v1.0.0")
+    print(f"SSH Client Manager v{__version__}")
     print(f"Python {sys.version}")
 
     try:

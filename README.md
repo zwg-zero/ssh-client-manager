@@ -8,13 +8,18 @@ A modern, user-friendly SSH connection manager built with **Python 3**, **GTK4**
 - **Tabbed Interface**: Multiple tabs per split pane, with drag-and-drop between panes
 - **Encrypted Credential Storage**: AES-encrypted password and passphrase storage (no plaintext, no expect)
 - **SSH_ASKPASS Authentication**: Secure password injection via SSH_ASKPASS mechanism (no expect scripts)
-- **Hierarchical Groups**: Organize servers in nested groups (e.g., Production/WebServers)
+- **Hierarchical Groups**: Organize servers in nested groups (e.g., Production/WebServers) with drag-and-drop reordering of both connections and groups
 - **Cluster Mode**: Send commands to all open terminals simultaneously
 - **Modern UI**: GTK4 + libadwaita with dark/light theme support
 - **Connection Management**: Full CRUD for connections with import/export
 - **Post-Login Commands**: Configure commands to run automatically after login (with delay support)
 - **Port Forwarding**: Local, remote, and dynamic port forwarding support
 - **Keyboard Shortcuts**: Comprehensive keyboard navigation
+- **Session Recording**: Record terminal sessions in asciicast v2 format with built-in playback
+- **SSH Key Manager**: Generate and manage SSH keys (RSA/Ed25519/ECDSA) from within the app
+- **Auto-Reconnect**: Automatic reconnection prompt when SSH sessions disconnect unexpectedly
+- **SFTP File Browser**: Browse, upload, and download remote files with drag-and-drop support
+- **Command Snippets**: Save and reuse frequently used commands with variable substitution
 
 ## Architecture
 
@@ -98,6 +103,7 @@ ssh-client-manager/
 ├── run.py                      # Entry point
 ├── requirements.txt            # Python dependencies
 ├── README.md                   # This file
+├── USER_GUIDE.md               # User-facing documentation
 ├── src/
 │   ├── __init__.py             # Package metadata
 │   ├── app.py                  # Adw.Application + CSS + shortcuts
@@ -110,7 +116,13 @@ ssh-client-manager/
 │   ├── ssh_handler.py          # SSH command builder + SSH_ASKPASS
 │   ├── sidebar.py              # Connection tree sidebar
 │   ├── config.py               # App configuration (JSON)
-│   └── preferences_dialog.py   # Preferences window
+│   ├── preferences_dialog.py   # Preferences window
+│   ├── sftp_browser.py         # SFTP file browser panel
+│   ├── snippet_manager.py      # Command snippet manager
+│   ├── cluster_window.py       # Cluster mode selector
+│   ├── ssh_config_editor.py    # SSH config file editor
+│   ├── ssh_key_manager.py      # SSH key management dialog
+│   └── session_recorder.py     # Session recording + playback (asciicast v2)
 ```
 
 ## Key Design Decisions

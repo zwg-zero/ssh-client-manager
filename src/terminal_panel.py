@@ -9,7 +9,8 @@ Adapts gnome-connection-manager's split/tab approach to GTK4:
 """
 
 import gi
-gi.require_version('Gtk', '4.0')
+
+gi.require_version("Gtk", "4.0")
 
 from gi.repository import Gtk, GLib, GObject, Gdk, Gio
 from typing import Optional
@@ -86,6 +87,7 @@ class TabLabel(Gtk.Box):
         attrs = self.label.get_attributes()
         if attrs is None:
             from gi.repository import Pango
+
             attrs = Pango.AttrList()
         # Would add strikethrough but Pango.AttrList in GTK4 is complex.
         # Use CSS instead.
@@ -108,8 +110,10 @@ class TabLabel(Gtk.Box):
         menu_model = Gio.Menu()
 
         section1 = Gio.Menu()
-        section1.append("Split Horizontally", "panel.split-h")
-        section1.append("Split Vertically", "panel.split-v")
+        section1.append("Split Left", "panel.split-left")
+        section1.append("Split Right", "panel.split-right")
+        section1.append("Split Up", "panel.split-up")
+        section1.append("Split Down", "panel.split-down")
         section1.append("Unsplit All", "panel.unsplit")
         menu_model.append_section(None, section1)
 
@@ -151,6 +155,10 @@ class TerminalPanel(Gtk.Box):
         "tab-removed": (GObject.SignalFlags.RUN_LAST, None, (object,)),
         "active-terminal-changed": (GObject.SignalFlags.RUN_LAST, None, (object,)),
         "terminal-title-changed": (GObject.SignalFlags.RUN_LAST, None, (object, str)),
+        "reconnect-requested": (GObject.SignalFlags.RUN_LAST, None, (object, object)),
+        "clone-requested": (GObject.SignalFlags.RUN_LAST, None, (object, object)),
+        "new-terminal-requested": (GObject.SignalFlags.RUN_LAST, None, ()),
+        "child-exited": (GObject.SignalFlags.RUN_LAST, None, (object, object)),
     }
 
     def __init__(self, config: Config):
@@ -191,14 +199,42 @@ class TerminalPanel(Gtk.Box):
         nb.set_vexpand(True)
         nb.set_hexpand(True)
 
-        # Allow tabs to be rearranged and detached
+        # Allow tabs to be rearranged (reorder only, no detach)
         nb.connect("page-added", self._on_page_added)
         nb.connect("page-removed", self._on_page_removed)
         nb.connect("switch-page", self._on_switch_page)
-        nb.connect("create-window", self._on_create_window)
+
+        # "+" button in tab header to add new terminal
+        add_btn = Gtk.Button(icon_name="tab-new-symbolic")
+        add_btn.add_css_class("flat")
+        add_btn.set_tooltip_text("New Local Terminal")
+        add_btn.connect("clicked", lambda _: self.emit("new-terminal-requested"))
+        nb.set_action_widget(add_btn, Gtk.PackType.END)
+
+        # Double-click on empty tab bar area to create new terminal
+        dbl_click = Gtk.GestureClick()
+        dbl_click.connect("pressed", self._on_notebook_double_click)
+        nb.add_controller(dbl_click)
 
         self._notebooks.append(nb)
         return nb
+
+    def _on_notebook_double_click(self, gesture, n_press, x, y):
+        """Handle double-click on notebook — open new terminal if on empty tab bar."""
+        if n_press != 2:
+            return
+        nb = gesture.get_widget()
+        target = nb.pick(x, y, Gtk.PickFlags.DEFAULT)
+        if target is None:
+            return
+        # Walk up from the picked widget to see if it's a tab label or terminal
+        w = target
+        while w is not None and w != nb:
+            if isinstance(w, (TerminalWidget, TabLabel)):
+                return  # Click on existing tab or terminal content
+            w = w.get_parent()
+        # Click was on empty notebook area (tab bar)
+        self.emit("new-terminal-requested")
 
     def _setup_actions(self):
         """Register action handlers for this panel."""
@@ -207,6 +243,10 @@ class TerminalPanel(Gtk.Box):
         actions = {
             "split-h": lambda *_: self.split(HSPLIT),
             "split-v": lambda *_: self.split(VSPLIT),
+            "split-left": lambda *_: self.split_directional("left"),
+            "split-right": lambda *_: self.split_directional("right"),
+            "split-up": lambda *_: self.split_directional("up"),
+            "split-down": lambda *_: self.split_directional("down"),
             "unsplit": lambda *_: self.unsplit(),
             "close-tab": lambda *_: self.close_current_tab(),
             "reconnect": lambda *_: self.reconnect_current(),
@@ -224,10 +264,13 @@ class TerminalPanel(Gtk.Box):
     # Tab Management
     # =====================================================================
 
-    def add_tab(self, terminal: TerminalWidget,
-                connection: Optional[Connection] = None,
-                title: str = "Terminal",
-                notebook: Optional[Gtk.Notebook] = None) -> Gtk.Notebook:
+    def add_tab(
+        self,
+        terminal: TerminalWidget,
+        connection: Optional[Connection] = None,
+        title: str = "Terminal",
+        notebook: Optional[Gtk.Notebook] = None,
+    ) -> Gtk.Notebook:
         """
         Add a terminal as a new tab in the specified (or focused) notebook.
 
@@ -249,8 +292,9 @@ class TerminalPanel(Gtk.Box):
         tab_label = TabLabel(title=title, show_close=show_close)
 
         # Connect tab label signals — look up notebook at call time, not capture time
-        tab_label.connect("close-clicked",
-                          lambda _, t=terminal: self._close_tab_by_lookup(t))
+        tab_label.connect(
+            "close-clicked", lambda _, t=terminal: self._close_tab_by_lookup(t)
+        )
 
         # Track the terminal
         self._terminals[terminal] = (connection, tab_label, nb)
@@ -267,7 +311,6 @@ class TerminalPanel(Gtk.Box):
         # Add to notebook
         page_num = nb.append_page(terminal, tab_label)
         nb.set_tab_reorderable(terminal, True)
-        nb.set_tab_detachable(terminal, True)
         nb.set_current_page(page_num)
 
         # Focus the terminal
@@ -291,8 +334,10 @@ class TerminalPanel(Gtk.Box):
     def _restore_focus(self):
         """Re-focus the currently-active terminal (or any available one)."""
         # Prefer the terminal we already consider focused
-        if (self.focused_terminal is not None
-                and self.focused_terminal.get_parent() is not None):
+        if (
+            self.focused_terminal is not None
+            and self.focused_terminal.get_parent() is not None
+        ):
             GLib.idle_add(self.focused_terminal.grab_focus)
             return
         # Fallback: first visible terminal we can find
@@ -355,14 +400,14 @@ class TerminalPanel(Gtk.Box):
         """Get all terminal widgets."""
         return list(self._terminals.keys())
 
-    def get_terminal_info(self) -> list[tuple[str, 'TerminalWidget']]:
+    def get_terminal_info(self) -> list[tuple[str, "TerminalWidget"]]:
         """Return ``[(title, terminal), ...]`` for every open tab."""
         result = []
         for terminal, (conn, tab_label, nb) in self._terminals.items():
             title = (
                 tab_label.get_title()
-                if tab_label else
-                (conn.name if conn else "Terminal")
+                if tab_label
+                else (conn.name if conn else "Terminal")
             )
             result.append((title, terminal))
         return result
@@ -384,6 +429,19 @@ class TerminalPanel(Gtk.Box):
         """Get the connection associated with a terminal."""
         info = self._terminals.get(terminal)
         return info[0] if info else None
+
+    def get_tab_title(self, terminal: TerminalWidget) -> Optional[str]:
+        """Get the tab title for a terminal."""
+        info = self._terminals.get(terminal)
+        if info and info[1]:
+            return info[1].get_title()
+        return None
+
+    def set_tab_title(self, terminal: TerminalWidget, title: str):
+        """Set the tab title for a terminal."""
+        info = self._terminals.get(terminal)
+        if info and info[1]:
+            info[1].set_title(title)
 
     def next_tab(self):
         """Switch to next tab in focused notebook."""
@@ -414,59 +472,78 @@ class TerminalPanel(Gtk.Box):
     # Split Management (adapted from gnome-connection-manager)
     # =====================================================================
 
-    def split(self, orientation: Gtk.Orientation):
+    def split_directional(self, direction: str):
+        """
+        Split the focused notebook in a specific direction.
+
+        direction: 'left', 'right', 'up', 'down'
+        - left/right: horizontal split, new pane on the specified side
+        - up/down: vertical split, new pane on the specified side
+        """
+        if direction in ("left", "right"):
+            orientation = HSPLIT
+        else:
+            orientation = VSPLIT
+
+        # For left/up, we want the NEW pane on the start side
+        new_on_start = direction in ("left", "up")
+        self.split(orientation, new_on_start=new_on_start)
+
+    def split(self, orientation: Gtk.Orientation, new_on_start: bool = False):
         """
         Split the focused notebook, creating a new pane.
 
-        Algorithm:
-        1. The focused notebook must have >= 2 tabs (need at least one to move)
-        2. Create a new Gtk.Paned with the given orientation
-        3. Remove the focused notebook from its parent
-        4. Place the focused notebook as the start child of the paned
-        5. Create a new notebook as the end child
-        6. Move the current tab from the old notebook to the new one
-        7. Insert the paned where the old notebook was
+        Works with any number of tabs:
+        - 2+ tabs: moves the current tab to the new pane
+        - 1 tab: creates an empty new pane (emits new-terminal-requested)
+        - 0 tabs: no-op
+
+        Args:
+            orientation: HSPLIT or VSPLIT
+            new_on_start: if True, place the new pane on the left/top side
         """
         nb = self.focused_notebook
-        if nb is None:
-            return
-
-        # Need at least 2 tabs to split (one stays, one moves)
-        if nb.get_n_pages() < 2:
+        if nb is None or nb.get_n_pages() < 1:
             return
 
         self._reorganizing = True
 
-        # Get the current page to move
-        current_page = nb.get_current_page()
-        if current_page < 0:
-            return
+        child_to_move = None
+        move_tab_info = None
+        move_title = "Terminal"
 
-        child = nb.get_nth_page(current_page)
-        if child is None:
-            return
+        if nb.get_n_pages() >= 2:
+            current_page = nb.get_current_page()
+            if current_page < 0:
+                self._reorganizing = False
+                return
+            child_to_move = nb.get_nth_page(current_page)
+            if child_to_move is None:
+                self._reorganizing = False
+                return
+            move_tab_info = self._terminals.get(child_to_move)
+            if move_tab_info:
+                _, old_lbl, _ = move_tab_info
+                move_title = old_lbl.get_title() if old_lbl else "Terminal"
 
-        tab_label = nb.get_tab_label(child)
+            # Remove the page from the source notebook
+            self._clear_root_focus(nb)
+            child_to_move.set_visible(False)
+            nb.remove_page(current_page)
 
-        # Get notebook's parent
-        parent = nb.get_parent()
-
-        # Create a new paned
+        # Create paned + new notebook
         paned = Gtk.Paned(orientation=orientation)
         paned.set_vexpand(True)
         paned.set_hexpand(True)
         paned.set_wide_handle(True)
 
-        # Create new notebook
         new_nb = self._create_notebook()
 
-        # Remove the old notebook from its parent
+        parent = nb.get_parent()
         if parent == self:
-            # It's the top-level child of this TerminalPanel
             self.remove(nb)
             self.append(paned)
         elif isinstance(parent, Gtk.Paned):
-            # Clear focus before reparenting inside a paned
             self._clear_root_focus(nb)
             if parent.get_start_child() == nb:
                 parent.set_start_child(None)
@@ -475,56 +552,61 @@ class TerminalPanel(Gtk.Box):
                 parent.set_end_child(None)
                 parent.set_end_child(paned)
         else:
-            # Unknown parent type, bail
             self._notebooks.remove(new_nb)
+            if child_to_move and move_tab_info:
+                conn, old_lbl, _ = move_tab_info
+                restore_lbl = TabLabel(
+                    title=move_title,
+                    show_close=self.config.get("show_tab_close_button", True),
+                )
+                restore_lbl.connect(
+                    "close-clicked",
+                    lambda _, t=child_to_move: self._close_tab_by_lookup(t),
+                )
+                self._terminals[child_to_move] = (conn, restore_lbl, nb)
+                nb.append_page(child_to_move, restore_lbl)
+                nb.set_tab_reorderable(child_to_move, True)
+                child_to_move.set_visible(True)
+            self._reorganizing = False
             return
 
-        # Place the old notebook in pane 1 (start)
-        paned.set_start_child(nb)
+        paned.set_start_child(nb if not new_on_start else new_nb)
+        paned.set_end_child(new_nb if not new_on_start else nb)
 
-        # Remove the current tab from old notebook
-        # Keep a Python reference to the child to prevent it from being destroyed
-        child_ref = child  # prevent GC during reparenting
-        tab_info = self._terminals.get(child)
-        self._safe_remove_page(nb, current_page)
-
-        # Place the new notebook in pane 2 (end)
-        paned.set_end_child(new_nb)
-
-        # Add the moved tab to the new notebook
-        if tab_info:
-            conn, old_tab_label, _ = tab_info
+        # Add the moved tab to the new notebook (2+ tabs case)
+        if child_to_move and move_tab_info:
+            conn, old_lbl, _ = move_tab_info
             new_tab_label = TabLabel(
-                title=old_tab_label.get_title(),
-                show_close=self.config.get("show_tab_close_button", True)
+                title=move_title,
+                show_close=self.config.get("show_tab_close_button", True),
             )
-            new_tab_label.connect("close-clicked",
-                                  lambda _, t=child_ref: self._close_tab_by_lookup(t))
-            self._terminals[child_ref] = (conn, new_tab_label, new_nb)
-
-            new_nb.append_page(child_ref, new_tab_label)
-            child_ref.set_visible(True)  # restore after _safe_remove_page
-            new_nb.set_tab_reorderable(child_ref, True)
-            new_nb.set_tab_detachable(child_ref, True)
+            new_tab_label.connect(
+                "close-clicked", lambda _, t=child_to_move: self._close_tab_by_lookup(t)
+            )
+            self._terminals[child_to_move] = (conn, new_tab_label, new_nb)
+            new_nb.append_page(child_to_move, new_tab_label)
+            child_to_move.set_visible(True)
+            new_nb.set_tab_reorderable(child_to_move, True)
 
         # Set paned position at midpoint
         def set_position():
+            alloc = paned.get_allocation()
             if orientation == HSPLIT:
-                alloc = paned.get_allocation()
                 paned.set_position(alloc.width // 2 if alloc.width > 0 else 400)
             else:
-                alloc = paned.get_allocation()
                 paned.set_position(alloc.height // 2 if alloc.height > 0 else 300)
             return False
 
         GLib.idle_add(set_position)
 
         self._reorganizing = False
-
-        # Focus the new notebook/terminal
         self.focused_notebook = new_nb
-        if isinstance(child_ref, TerminalWidget):
-            GLib.idle_add(child_ref.grab_focus)
+
+        if child_to_move and isinstance(child_to_move, TerminalWidget):
+            GLib.idle_add(child_to_move.grab_focus)
+        else:
+            # 1-tab case: request a new terminal in the new pane
+            self.emit("new-terminal-requested")
 
     def unsplit(self):
         """
@@ -568,25 +650,30 @@ class TerminalPanel(Gtk.Box):
         for child_widget, old_label in all_tabs:
             if isinstance(child_widget, TerminalWidget):
                 tab_info = self._terminals.get(child_widget)
-                title = old_label.get_title() if hasattr(old_label, 'get_title') else "Terminal"
+                title = (
+                    old_label.get_title()
+                    if hasattr(old_label, "get_title")
+                    else "Terminal"
+                )
                 if tab_info:
                     conn, _, _ = tab_info
 
                 new_label = TabLabel(
                     title=title,
-                    show_close=self.config.get("show_tab_close_button", True)
+                    show_close=self.config.get("show_tab_close_button", True),
                 )
-                new_label.connect("close-clicked",
-                                  lambda _, t=child_widget: self._close_tab_by_lookup(t))
+                new_label.connect(
+                    "close-clicked",
+                    lambda _, t=child_widget: self._close_tab_by_lookup(t),
+                )
                 self._terminals[child_widget] = (
                     tab_info[0] if tab_info else None,
                     new_label,
-                    self.main_notebook
+                    self.main_notebook,
                 )
                 self.main_notebook.append_page(child_widget, new_label)
                 child_widget.set_visible(True)  # restore after _safe_remove_page
                 self.main_notebook.set_tab_reorderable(child_widget, True)
-                self.main_notebook.set_tab_detachable(child_widget, True)
 
         self._reorganizing = False
 
@@ -665,23 +752,38 @@ class TerminalPanel(Gtk.Box):
     def reconnect_current(self):
         """
         Reconnect the current terminal's SSH session.
-        Re-emits tab-added so the window can re-spawn the SSH process.
+        Emits reconnect-requested so the window can spawn a new SSH process.
         """
         if self.focused_terminal and self.focused_terminal in self._terminals:
             conn, tab_label, nb = self._terminals[self.focused_terminal]
             if conn:
-                self.emit("tab-added", self.focused_terminal)
-
-    def clone_current_tab(self):
-        """Clone the current tab, opening a new one with the same connection."""
-        if self.focused_terminal and self.focused_terminal in self._terminals:
-            conn, tab_label, nb = self._terminals[self.focused_terminal]
-            # Signal the window to create a new connection tab
-            # We'll handle this via the tab-added signal with a clone marker
-            if conn:
+                # Create a fresh terminal widget
                 new_terminal = TerminalWidget(self.config, conn)
                 title = tab_label.get_title() if tab_label else conn.name or "Terminal"
+
+                # Replace the old terminal's tab with the new one
+                page_num = nb.page_num(self.focused_terminal)
+                if page_num >= 0:
+                    self._safe_remove_page(nb, page_num)
+
+                self.add_tab(new_terminal, conn, title, nb)
+                self.emit("reconnect-requested", new_terminal, conn)
+
+    def clone_current_tab(self):
+        """Clone the current tab, requesting the window to start the connection."""
+        if self.focused_terminal and self.focused_terminal in self._terminals:
+            conn, tab_label, nb = self._terminals[self.focused_terminal]
+            new_terminal = TerminalWidget(self.config, conn)
+            title = tab_label.get_title() if tab_label else "Terminal"
+            if conn:
                 self.add_tab(new_terminal, conn, f"{title} (clone)")
+                self.emit("clone-requested", new_terminal, conn)
+            else:
+                # Local shell: just spawn a new shell
+                from .ssh_handler import SSHHandler
+
+                self.add_tab(new_terminal, None, f"{title} (clone)")
+                new_terminal.spawn_command(SSHHandler.get_local_shell_command())
 
     # =====================================================================
     # Cluster Mode
@@ -733,11 +835,12 @@ class TerminalPanel(Gtk.Box):
         """Deferred cleanup after page removal."""
         if child.get_parent() is None:
             # Terminal was actually closed (not moved via DnD)
+            child.set_visible(False)
             if child in self._terminals:
                 del self._terminals[child]
             self.emit("tab-removed", child)
 
-        # Check if notebook is now empty
+        # Check if notebook is now empty and should be collapsed
         self._check_notebook_empty(notebook)
         return False
 
@@ -747,15 +850,6 @@ class TerminalPanel(Gtk.Box):
             self.focused_terminal = child
             self.focused_notebook = notebook
             self.emit("active-terminal-changed", child)
-
-    def _on_create_window(self, notebook, page, x, y):
-        """
-        Handle tab being dragged out of a notebook.
-
-        In GTK4, returning None means the tab stays in the notebook.
-        For now, we don't support detaching to new windows.
-        """
-        return None
 
     def _on_terminal_focused(self, terminal: TerminalWidget):
         """Track which terminal/notebook has focus (looks up notebook dynamically)."""
@@ -775,6 +869,10 @@ class TerminalPanel(Gtk.Box):
                 pass
             elif title:
                 # Local shell: use the VTE window title
+                # Preserve [REC] suffix if terminal is recording
+                if getattr(terminal, "is_recording", False):
+                    if not title.endswith(" [REC]"):
+                        title = title + " [REC]"
                 tab_label.set_title(title)
             self.emit("terminal-title-changed", terminal, title)
 
@@ -782,4 +880,14 @@ class TerminalPanel(Gtk.Box):
         """Handle terminal child process exiting."""
         if terminal in self._terminals:
             conn, tab_label, nb = self._terminals[terminal]
-            tab_label.mark_disconnected()
+            # Skip visual disconnect for SSH -f (background mode): the
+            # SSH parent exits immediately but the tunnel/command is alive.
+            if not getattr(terminal, "_background_mode", False):
+                tab_label.mark_disconnected()
+            self.emit("child-exited", terminal, conn)
+
+    def mark_tab_active(self, terminal):
+        """Clear disconnected visual state for a terminal's tab."""
+        info = self._terminals.get(terminal)
+        if info and info[1]:
+            info[1].mark_active()

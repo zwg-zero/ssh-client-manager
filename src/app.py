@@ -10,9 +10,10 @@ the best features of gnome-connection-manager and sshpilot:
 """
 
 import gi
-gi.require_version('Gtk', '4.0')
-gi.require_version('Adw', '1')
-gi.require_version('Vte', '3.91')
+
+gi.require_version("Gtk", "4.0")
+gi.require_version("Adw", "1")
+gi.require_version("Vte", "3.91")
 
 import sys
 from gi.repository import Gtk, Adw, Gio, GLib
@@ -72,6 +73,44 @@ notebook > header > tabs > tab:checked {
     background-color: alpha(@accent_bg_color, 0.1);
     border-bottom: 1px solid @accent_bg_color;
 }
+
+/* Drop zone overlay */
+.drop-zone {
+    background-color: alpha(@accent_bg_color, 0.2);
+    border: 2px dashed @accent_bg_color;
+    border-radius: 6px;
+}
+
+/* Favorite star */
+.favorite-icon {
+    color: @warning_color;
+}
+
+/* Tag chip */
+.tag-chip {
+    background-color: alpha(@accent_bg_color, 0.2);
+    border-radius: 10px;
+    padding: 1px 6px;
+    font-size: 0.8em;
+}
+
+/* Connected status indicator */
+.status-connected {
+    color: @success_color;
+}
+
+.status-disconnected {
+    color: alpha(@window_fg_color, 0.3);
+}
+
+/* Snippet row */
+.snippet-row {
+    padding: 4px 8px;
+}
+
+.snippet-row:hover {
+    background-color: alpha(@accent_bg_color, 0.1);
+}
 """
 
 
@@ -114,8 +153,7 @@ class SSHClientApp(Adw.Application):
         display = Gdk.Display.get_default()
         if display:
             Gtk.StyleContext.add_provider_for_display(
-                display, css_provider,
-                Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
+                display, css_provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
             )
 
     def _register_shortcuts(self):
@@ -130,6 +168,8 @@ class SSHClientApp(Adw.Application):
             "win.toggle-sidebar": ["F9"],
             "win.search-terminal": ["<Ctrl>f"],
             "win.split-h": ["<Ctrl><Shift>h"],
+            "win.split-v": ["<Ctrl><Shift>j"],
+            "win.snippets": ["<Ctrl><Shift>s"],
             "win.quit": ["<Ctrl>q"],
         }
 

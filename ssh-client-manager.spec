@@ -130,6 +130,7 @@ else:
 
 # ── Hidden imports ───────────────────────────────────────────────────────────
 hiddenimports = collect_submodules("gi")
+hiddenimports += collect_submodules("paramiko")
 hiddenimports += [
     "gi._gi_cairo",
     "gi.repository.cairo",
@@ -187,8 +188,8 @@ app = BUNDLE(
         "NSHighResolutionCapable":        True,
         "LSMinimumSystemVersion":         min_macos,
         "CFBundleDisplayName":            "SSH Client Manager",
-        "CFBundleShortVersionString":     "1.0.0",
-        "CFBundleVersion":                "1.0.0",
+        "CFBundleShortVersionString":     "1.1.0",
+        "CFBundleVersion":                "1.1.0",
         "NSHumanReadableCopyright":       "© 2026 SSH Client Manager Contributors",
         "LSUIElement":                    False,
     },

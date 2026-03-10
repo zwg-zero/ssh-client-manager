@@ -5,6 +5,7 @@ Connections are stored in a JSON file at:
   ~/.config/ssh-client-manager/connections.json
 """
 
+import dataclasses
 import json
 import uuid
 from dataclasses import dataclass, asdict
@@ -43,6 +44,45 @@ class Connection:
     # TERM env var override
     term_type: str = ""
 
+    # Protocol type (ssh, sftp, rdp, vnc)
+    protocol: str = "ssh"
+
+    # Structured connection fields (RDP/VNC primarily; optional for SSH/SFTP)
+    host: str = ""
+    port: int = 0  # 0 = use protocol default
+    username: str = ""
+    domain: str = ""  # RDP domain/workgroup
+
+    # RDP specific
+    rdp_resolution: str = ""
+    rdp_fullscreen: bool = False
+
+    # VNC specific
+    vnc_quality: str = ""
+
+    # Extra protocol-specific command-line options
+    extra_options: str = ""
+
+    # Connection dependency: ID of connection to open first
+    depends_on: str = ""
+
+    # Tags for filtering (comma-separated)
+    tags: str = ""
+
+    # Favorite flag
+    favorite: bool = False
+
+    # Port forwards: JSON list of {"type":"L"|"R"|"D", "local":"port", "remote":"host:port"}
+    port_forwards: str = ""
+
+    # Jump host / ProxyJump (e.g. "user@jumphost" or connection ID)
+    jump_host: str = ""
+
+    # Auto-reconnect settings
+    auto_reconnect: bool = False
+    auto_reconnect_delay: int = 5  # seconds
+    auto_reconnect_max: int = 3  # max attempts (0 = unlimited)
+
     def __post_init__(self):
         if not self.id:
             self.id = str(uuid.uuid4())
@@ -55,19 +95,31 @@ class Connection:
         return Connection(**data)
 
     def display_name(self) -> str:
-        """Formatted display string (extract user@host from command if possible)."""
+        """Formatted display string."""
+        if self.protocol == "rdp":
+            host = self.host or "unknown"
+            port = self.port or 3389
+            prefix = f"{self.username}@" if self.username else ""
+            return f"{prefix}{host}:{port}" if port != 3389 else f"{prefix}{host}"
+        elif self.protocol == "vnc":
+            host = self.host or "unknown"
+            port = self.port or 5900
+            return f"{host}:{port}" if port != 5900 else host
+        # ssh / sftp
         if self.command:
-            # Try to extract the destination from the ssh command
             import shlex
+
             try:
                 parts = shlex.split(self.command)
-                # The destination is typically the last non-option argument
                 for part in reversed(parts):
-                    if not part.startswith("-") and part != "ssh":
+                    if not part.startswith("-") and part not in ("ssh", "sftp"):
                         return part
             except ValueError:
                 pass
             return self.command[:60]
+        if self.host:
+            prefix = f"{self.username}@" if self.username else ""
+            return f"{prefix}{self.host}"
         return self.name or "(no command)"
 
 
@@ -109,7 +161,7 @@ class ConnectionManager:
                         migrated = True
 
                     # Strip unknown keys before constructing
-                    valid_keys = {f.name for f in Connection.__dataclass_fields__.values()}
+                    valid_keys = {f.name for f in dataclasses.fields(Connection)}
                     filtered = {k: v for k, v in item.items() if k in valid_keys}
 
                     conn = Connection(**filtered)
@@ -232,12 +284,12 @@ class ConnectionManager:
         """Delete a group. Optionally delete its connections."""
         # Remove the group and its subgroups
         self._groups = [
-            g for g in self._groups
-            if g != group and not g.startswith(group + "/")
+            g for g in self._groups if g != group and not g.startswith(group + "/")
         ]
         if delete_connections:
             self._connections = [
-                c for c in self._connections
+                c
+                for c in self._connections
                 if c.group != group and not c.group.startswith(group + "/")
             ]
         else:
@@ -289,23 +341,92 @@ class ConnectionManager:
 
     # --- Import/Export ---
 
-    def export_connections(self) -> str:
-        """Export all connections as JSON string."""
+    def export_connections(self, credential_store=None) -> str:
+        """Export all connections as JSON string, optionally including credentials."""
+        connections_data = []
+        for c in self._connections:
+            entry = asdict(c)
+            if credential_store and credential_store.has_credentials(c.id):
+                creds = {}
+                pw = credential_store.get_password(c.id)
+                if pw:
+                    creds["password"] = pw
+                passphrases = credential_store.get_passphrases(c.id)
+                if passphrases:
+                    creds["passphrases"] = passphrases
+                entry["_credentials"] = creds
+            connections_data.append(entry)
         data = {
-            "connections": [asdict(c) for c in self._connections],
+            "connections": connections_data,
             "groups": self.get_groups(),
         }
         return json.dumps(data, indent=2)
 
-    def import_connections(self, json_str: str, replace: bool = False):
-        """Import connections from JSON string."""
+    def import_connections(
+        self, json_str: str, replace: bool = False, credential_store=None
+    ) -> dict:
+        """Import connections from JSON string.
+
+        Args:
+            json_str: JSON data
+            replace: If True, replace all existing connections
+            credential_store: If provided, import embedded credentials
+
+        Returns:
+            dict with 'imported' count and 'conflicts' list of renamed connections
+        """
         try:
             data = json.loads(json_str)
             imported = []
+            conflicts = []
+            existing_names = (
+                {c.name for c in self._connections} if not replace else set()
+            )
+
+            # Build a mapping from old IDs to new IDs so we can fix
+            # cross-references like depends_on after all connections are created.
+            id_map: dict[str, str] = {}
+
             for item in data.get("connections", []):
-                conn = Connection(**item)
+                # Extract embedded credentials before constructing Connection
+                embedded_creds = item.pop("_credentials", None)
+
+                # Strip unknown keys
+                valid_keys = {f.name for f in dataclasses.fields(Connection)}
+                filtered = {k: v for k, v in item.items() if k in valid_keys}
+
+                conn = Connection(**filtered)
+                old_id = conn.id
                 conn.id = str(uuid.uuid4())  # Always generate new IDs
+                id_map[old_id] = conn.id
+
+                # Handle name conflicts in append mode
+                if not replace and conn.name in existing_names:
+                    original_name = conn.name
+                    suffix = 2
+                    while f"{original_name} ({suffix})" in existing_names:
+                        suffix += 1
+                    conn.name = f"{original_name} ({suffix})"
+                    conflicts.append({"original": original_name, "renamed": conn.name})
+
+                existing_names.add(conn.name)
                 imported.append(conn)
+
+                # Import credentials if available
+                if credential_store and embedded_creds:
+                    if embedded_creds.get("password"):
+                        credential_store.store_password(
+                            conn.id, embedded_creds["password"]
+                        )
+                    if embedded_creds.get("passphrases"):
+                        credential_store.store_passphrases(
+                            conn.id, embedded_creds["passphrases"]
+                        )
+
+            # Remap cross-references (depends_on) to use new IDs
+            for conn in imported:
+                if conn.depends_on and conn.depends_on in id_map:
+                    conn.depends_on = id_map[conn.depends_on]
 
             if replace:
                 self._connections = imported
@@ -317,5 +438,6 @@ class ConnectionManager:
                     self._groups.append(group)
 
             self.save()
+            return {"imported": len(imported), "conflicts": conflicts}
         except (json.JSONDecodeError, TypeError) as e:
             raise ValueError(f"Invalid import data: {e}")

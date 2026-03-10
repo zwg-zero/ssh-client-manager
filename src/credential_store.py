@@ -41,7 +41,33 @@ class CredentialStore:
         self._key_file = self._config_dir / ".store.key"
         self._cred_file = self._config_dir / "credentials.dat"
         self._key = self._load_or_create_key()
-        self._fernet = Fernet(self._key)
+        try:
+            self._fernet = Fernet(self._key)
+        except (ValueError, Exception) as e:
+            print(f"Warning: Invalid encryption key, regenerating: {e}")
+            # Key file is corrupted — regenerate
+            # Back up old credentials file before regenerating key
+            if self._cred_file.exists():
+                backup_path = self._cred_file.with_suffix(".dat.bak")
+                try:
+                    import shutil
+
+                    shutil.copy2(str(self._cred_file), str(backup_path))
+                    print(f"Warning: Old credentials backed up to {backup_path}")
+                    print(
+                        "Warning: Stored passwords will be lost due to key regeneration."
+                    )
+                except IOError:
+                    pass
+            self._key = Fernet.generate_key()
+            fd = os.open(
+                str(self._key_file),
+                os.O_WRONLY | os.O_CREAT | os.O_TRUNC,
+                stat.S_IRUSR | stat.S_IWUSR,
+            )
+            with os.fdopen(fd, "wb") as f:
+                f.write(self._key)
+            self._fernet = Fernet(self._key)
         self._data = self._load()
 
     def _load_or_create_key(self) -> bytes:
@@ -108,7 +134,9 @@ class CredentialStore:
 
     def get_passphrase1(self, connection_id: str) -> str | None:
         """Retrieve the first passphrase for a connection."""
-        return self._data.get("credentials", {}).get(connection_id, {}).get("passphrase1")
+        return (
+            self._data.get("credentials", {}).get(connection_id, {}).get("passphrase1")
+        )
 
     def store_passphrase2(self, connection_id: str, passphrase: str):
         """Store the second passphrase for a connection."""
@@ -119,7 +147,30 @@ class CredentialStore:
 
     def get_passphrase2(self, connection_id: str) -> str | None:
         """Retrieve the second passphrase for a connection."""
-        return self._data.get("credentials", {}).get(connection_id, {}).get("passphrase2")
+        return (
+            self._data.get("credentials", {}).get(connection_id, {}).get("passphrase2")
+        )
+
+    def store_passphrases(self, connection_id: str, passphrases: list[str]):
+        """Store a list of passphrases (replaces legacy passphrase1/passphrase2)."""
+        creds = self._data.setdefault("credentials", {})
+        entry = creds.setdefault(connection_id, {})
+        entry["passphrases"] = [p for p in passphrases if p]
+        entry.pop("passphrase1", None)
+        entry.pop("passphrase2", None)
+        self._save()
+
+    def get_passphrases(self, connection_id: str) -> list[str]:
+        """Retrieve all passphrases (backward-compatible with passphrase1/2)."""
+        entry = self._data.get("credentials", {}).get(connection_id, {})
+        if "passphrases" in entry:
+            return [p for p in entry["passphrases"] if p]
+        result = []
+        if entry.get("passphrase1"):
+            result.append(entry["passphrase1"])
+        if entry.get("passphrase2"):
+            result.append(entry["passphrase2"])
+        return result
 
     def delete_credentials(self, connection_id: str):
         """Remove all credentials for a connection."""
@@ -128,10 +179,27 @@ class CredentialStore:
             del creds[connection_id]
             self._save()
 
+    # --- Global Passphrases ---
+
+    GLOBAL_KEY = "__global_passphrases__"
+
+    def store_global_passphrases(self, passphrases: list[str]):
+        """Store global passphrases that are tried for all connections."""
+        self.store_passphrases(self.GLOBAL_KEY, passphrases)
+
+    def get_global_passphrases(self) -> list[str]:
+        """Retrieve global passphrases."""
+        return self.get_passphrases(self.GLOBAL_KEY)
+
     def has_credentials(self, connection_id: str) -> bool:
         """Check if any credentials exist for a connection."""
         entry = self._data.get("credentials", {}).get(connection_id, {})
-        return bool(entry.get("password") or entry.get("passphrase1") or entry.get("passphrase2"))
+        return bool(
+            entry.get("password")
+            or entry.get("passphrase1")
+            or entry.get("passphrase2")
+            or any(entry.get("passphrases", []))
+        )
 
     def list_connection_ids(self) -> list[str]:
         """List all connection IDs that have stored credentials."""

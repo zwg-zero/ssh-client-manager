@@ -40,10 +40,22 @@ DEFAULTS = {
     "terminal_audible_bell": False,
     # Terminal color palette (Catppuccin Mocha)
     "terminal_palette": [
-        "#45475a", "#f38ba8", "#a6e3a1", "#f9e2af",
-        "#89b4fa", "#f5c2e7", "#94e2d5", "#bac2de",
-        "#585b70", "#f38ba8", "#a6e3a1", "#f9e2af",
-        "#89b4fa", "#f5c2e7", "#94e2d5", "#a6adc8",
+        "#45475a",
+        "#f38ba8",
+        "#a6e3a1",
+        "#f9e2af",
+        "#89b4fa",
+        "#f5c2e7",
+        "#94e2d5",
+        "#bac2de",
+        "#585b70",
+        "#f38ba8",
+        "#a6e3a1",
+        "#f9e2af",
+        "#89b4fa",
+        "#f5c2e7",
+        "#94e2d5",
+        "#a6adc8",
     ],
     # SSH
     "ssh_default_port": 22,
@@ -54,9 +66,25 @@ DEFAULTS = {
     "confirm_close_window": True,
     "show_tab_close_button": True,
     "word_separators": "-A-Za-z0-9,./?%&#:_=+@~",
+    # Terminal logging
+    "terminal_logging_enabled": False,
+    "terminal_log_directory": "",
+    # Session recording
+    "session_recordings_directory": "",
+    # Desktop notifications
+    "notify_on_completion": True,
     # Cluster mode
     "cluster_mode_enabled": False,
+    # RDP defaults
+    "rdp_default_port": 3389,
+    "rdp_default_resolution": "1920x1080",
+    # VNC defaults
+    "vnc_default_port": 5900,
+    "vnc_default_quality": "high",
 }
+
+
+_SENTINEL = object()
 
 
 class Config:
@@ -85,9 +113,11 @@ class Config:
         except IOError as e:
             print(f"Warning: Could not save config: {e}")
 
-    def get(self, key: str, default=None):
+    def get(self, key: str, default=_SENTINEL):
         """Get a config value."""
-        return self._data.get(key, default if default is not None else DEFAULTS.get(key))
+        if default is not _SENTINEL:
+            return self._data.get(key, default)
+        return self._data.get(key, DEFAULTS.get(key))
 
     def set(self, key: str, value):
         """Set a config value and save."""
@@ -99,3 +129,9 @@ class Config:
 
     def __setitem__(self, key, value):
         self.set(key, value)
+
+    def batch_update(self, updates: dict):
+        """Update multiple config values at once with a single save."""
+        for key, value in updates.items():
+            self._data[key] = value
+        self.save()

@@ -5,15 +5,20 @@ Provides UI for configuring terminal appearance, behavior, and shortcuts.
 """
 
 import gi
-gi.require_version('Gtk', '4.0')
-gi.require_version('Adw', '1')
 
-from gi.repository import Gtk, Adw, Gdk
+gi.require_version("Gtk", "4.0")
+gi.require_version("Adw", "1")
+
+from gi.repository import Gtk, Adw, Gdk, GObject
 from .config import Config
 
 
 class PreferencesDialog(Adw.Window):
     """Application preferences window."""
+
+    __gsignals__ = {
+        "preferences-applied": (GObject.SignalFlags.RUN_LAST, None, ()),
+    }
 
     def __init__(self, parent: Gtk.Window, config: Config):
         super().__init__(
@@ -122,24 +127,100 @@ class PreferencesDialog(Adw.Window):
         self.switch_confirm_close_tab = Gtk.Switch()
         self.switch_confirm_close_tab.set_active(config["confirm_close_tab"])
         self.switch_confirm_close_tab.set_halign(Gtk.Align.START)
-        content.append(self._pref_row("Confirm Close Tab:", self.switch_confirm_close_tab))
+        content.append(
+            self._pref_row("Confirm Close Tab:", self.switch_confirm_close_tab)
+        )
 
         self.switch_confirm_close_window = Gtk.Switch()
         self.switch_confirm_close_window.set_active(config["confirm_close_window"])
         self.switch_confirm_close_window.set_halign(Gtk.Align.START)
-        content.append(self._pref_row("Confirm Close Window:", self.switch_confirm_close_window))
+        content.append(
+            self._pref_row("Confirm Close Window:", self.switch_confirm_close_window)
+        )
 
         self.switch_tab_close_btn = Gtk.Switch()
         self.switch_tab_close_btn.set_active(config["show_tab_close_button"])
         self.switch_tab_close_btn.set_halign(Gtk.Align.START)
         content.append(self._pref_row("Tab Close Button:", self.switch_tab_close_btn))
 
-        # === Apply/Save Buttons ===
+        content.append(Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL))
+
+        # === Logging Section ===
+        content.append(self._section_label("Terminal Logging"))
+
+        self.switch_logging = Gtk.Switch()
+        self.switch_logging.set_active(config.get("terminal_logging_enabled", False))
+        self.switch_logging.set_halign(Gtk.Align.START)
+        content.append(self._pref_row("Auto-Log Sessions:", self.switch_logging))
+
+        self.entry_log_dir = Gtk.Entry()
+        self.entry_log_dir.set_text(config.get("terminal_log_directory", ""))
+        self.entry_log_dir.set_placeholder_text("~/ssh-logs")
+        content.append(self._pref_row("Log Directory:", self.entry_log_dir))
+
+        content.append(Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL))
+
+        # === Session Recording Section ===
+        content.append(self._section_label("Session Recording"))
+
+        self.entry_rec_dir = Gtk.Entry()
+        self.entry_rec_dir.set_text(config.get("session_recordings_directory", ""))
+        self.entry_rec_dir.set_placeholder_text(
+            "~/Documents/SSHClientManager-Recordings"
+        )
+        content.append(self._pref_row("Recordings Directory:", self.entry_rec_dir))
+
+        content.append(Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL))
+
+        # === Notifications Section ===
+        content.append(self._section_label("Notifications"))
+
+        self.switch_notify = Gtk.Switch()
+        self.switch_notify.set_active(config.get("notify_on_completion", True))
+        self.switch_notify.set_halign(Gtk.Align.START)
+        content.append(self._pref_row("Notify on Close:", self.switch_notify))
+
+        content.append(Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL))
+
+        # === Global Passphrases Section ===
+        content.append(self._section_label("Global Passphrases"))
+
+        pp_hint = Gtk.Label(
+            label="These passphrases will be tried automatically for ALL\n"
+            "SSH key prompts (after any connection-specific ones)."
+        )
+        pp_hint.set_xalign(0)
+        pp_hint.add_css_class("dim-label")
+        pp_hint.set_margin_start(8)
+        content.append(pp_hint)
+
+        self._global_pp_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+        self._global_pp_box.set_margin_start(8)
+        self._global_pp_box.set_margin_end(8)
+        self._global_pp_entries: list[Gtk.PasswordEntry] = []
+        content.append(self._global_pp_box)
+
+        btn_add_pp = Gtk.Button(label="+ Add Passphrase")
+        btn_add_pp.add_css_class("flat")
+        btn_add_pp.set_halign(Gtk.Align.START)
+        btn_add_pp.set_margin_start(8)
+        btn_add_pp.connect("clicked", lambda _: self._add_global_pp_row())
+        content.append(btn_add_pp)
+
+        # Load existing global passphrases
+        self._credential_store = None  # will be set by caller
+        # We'll initialize the rows after construction via init_global_passphrases()
+
+        # === Apply/Cancel Buttons ===
         content.append(Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL))
 
         btn_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
         btn_box.set_halign(Gtk.Align.END)
         btn_box.set_margin_top(8)
+
+        btn_cancel = Gtk.Button(label="Cancel")
+        btn_cancel.connect("clicked", lambda _: self.close())
+        btn_box.append(btn_cancel)
 
         btn_apply = Gtk.Button(label="Apply")
         btn_apply.add_css_class("suggested-action")
@@ -176,23 +257,82 @@ class PreferencesDialog(Adw.Window):
         row.append(widget)
         return row
 
+    # --- Global Passphrase Rows ---
+
+    def _add_global_pp_row(self, value: str = ""):
+        """Add a global passphrase entry row."""
+        row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
+        entry = Gtk.PasswordEntry()
+        entry.set_show_peek_icon(True)
+        entry.set_hexpand(True)
+        if value:
+            entry.set_text(value)
+        try:
+            entry.props.placeholder_text = (
+                f"Passphrase {len(self._global_pp_entries) + 1}"
+            )
+        except Exception:
+            pass
+        row.append(entry)
+
+        btn_remove = Gtk.Button(label="✕")
+        btn_remove.add_css_class("flat")
+        btn_remove.add_css_class("circular")
+        btn_remove.connect(
+            "clicked", lambda _, r=row, e=entry: self._remove_global_pp_row(r, e)
+        )
+        row.append(btn_remove)
+
+        self._global_pp_entries.append(entry)
+        self._global_pp_box.append(row)
+
+    def _remove_global_pp_row(self, row, entry):
+        """Remove a global passphrase entry row."""
+        if entry in self._global_pp_entries:
+            self._global_pp_entries.remove(entry)
+        self._global_pp_box.remove(row)
+
+    def init_global_passphrases(self, credential_store):
+        """Initialize global passphrase rows from the credential store."""
+        self._credential_store = credential_store
+        existing = credential_store.get_global_passphrases()
+        for pp in existing:
+            self._add_global_pp_row(pp)
+        if not existing:
+            self._add_global_pp_row()  # one empty row by default
+
     def _on_apply(self, button):
         """Apply and save all preferences."""
         cfg = self.config
 
-        cfg.set("terminal_font", self.entry_font.get_text())
-        cfg.set("terminal_scrollback_lines", int(self.spin_scrollback.get_value()))
-        cfg.set("terminal_bg_color", self.color_bg.get_rgba().to_string())
-        cfg.set("terminal_fg_color", self.color_fg.get_rgba().to_string())
-        cfg.set("terminal_cursor_shape", self.combo_cursor.get_active_id() or "block")
-        cfg.set("terminal_allow_bold", self.switch_bold.get_active())
-        cfg.set("terminal_audible_bell", self.switch_bell.get_active())
-        cfg.set("ssh_default_port", int(self.spin_default_port.get_value()))
-        cfg.set("ssh_keepalive_interval", int(self.spin_keepalive.get_value()))
-        cfg.set("ssh_connection_timeout", int(self.spin_timeout.get_value()))
-        cfg.set("confirm_close_tab", self.switch_confirm_close_tab.get_active())
-        cfg.set("confirm_close_window", self.switch_confirm_close_window.get_active())
-        cfg.set("show_tab_close_button", self.switch_tab_close_btn.get_active())
+        cfg.batch_update(
+            {
+                "terminal_font": self.entry_font.get_text(),
+                "terminal_scrollback_lines": int(self.spin_scrollback.get_value()),
+                "terminal_bg_color": self.color_bg.get_rgba().to_string(),
+                "terminal_fg_color": self.color_fg.get_rgba().to_string(),
+                "terminal_cursor_shape": self.combo_cursor.get_active_id() or "block",
+                "terminal_allow_bold": self.switch_bold.get_active(),
+                "terminal_audible_bell": self.switch_bell.get_active(),
+                "ssh_default_port": int(self.spin_default_port.get_value()),
+                "ssh_keepalive_interval": int(self.spin_keepalive.get_value()),
+                "ssh_connection_timeout": int(self.spin_timeout.get_value()),
+                "confirm_close_tab": self.switch_confirm_close_tab.get_active(),
+                "confirm_close_window": self.switch_confirm_close_window.get_active(),
+                "show_tab_close_button": self.switch_tab_close_btn.get_active(),
+                "terminal_logging_enabled": self.switch_logging.get_active(),
+                "terminal_log_directory": self.entry_log_dir.get_text().strip(),
+                "session_recordings_directory": self.entry_rec_dir.get_text().strip(),
+                "notify_on_completion": self.switch_notify.get_active(),
+            }
+        )
 
-        cfg.save()
+        # Save global passphrases
+        if self._credential_store is not None:
+            pps = [
+                e.get_text() for e in self._global_pp_entries if e.get_text().strip()
+            ]
+            self._credential_store.store_global_passphrases(pps)
+
+        self.emit("preferences-applied")
         self.close()
