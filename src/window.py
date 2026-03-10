@@ -58,6 +58,9 @@ class MainWindow(Adw.ApplicationWindow):
         self.credential_store = CredentialStore()
         self.ssh_handler = SSHHandler(self.credential_store)
 
+        # Track pending askpass cleanup timers by connection_id
+        self._askpass_cleanup_timers: dict[str, int] = {}
+
         # Cluster mode state
         self._cluster_mode = False
         self._cluster_window: ClusterWindow | None = None
@@ -267,9 +270,12 @@ class MainWindow(Adw.ApplicationWindow):
                              lambda _: self._on_new_connection(None, None))
         self.sidebar.connect("add-group-requested",
                              lambda _: self._on_add_group())
+        self.sidebar.connect("delete-requested",
+                             self._on_sidebar_delete_by_id)
 
         # Terminal panel signals
         self.terminal_panel.connect("tab-added", self._on_tab_added)
+        self.terminal_panel.connect("clone-requested", self._on_clone_requested)
         self.terminal_panel.connect("tab-removed", self._on_tab_removed)
         self.terminal_panel.connect("active-terminal-changed",
                                     self._on_active_terminal_changed)
@@ -315,8 +321,10 @@ class MainWindow(Adw.ApplicationWindow):
         if commands:
             self._schedule_post_login_commands(terminal, commands)
 
-        # Clean up askpass script after delay
-        GLib.timeout_add(15000, lambda: self.ssh_handler.cleanup_askpass(conn.id) or False)
+        # Clean up askpass script after delay (cancel any existing timer first)
+        self._cancel_askpass_timer(conn.id)
+        timer_id = GLib.timeout_add(15000, self._askpass_timer_fired, conn.id)
+        self._askpass_cleanup_timers[conn.id] = timer_id
 
         self._set_status(f"Connected: {conn.name}")
 
@@ -643,10 +651,19 @@ class MainWindow(Adw.ApplicationWindow):
     def _on_sidebar_delete(self, action, param):
         conn_id = self.sidebar.get_selected_connection_id()
         if conn_id:
-            self.connection_manager.delete_connection(conn_id)
-            self.credential_store.delete_credentials(conn_id)
-            self.sidebar.refresh()
-            self._set_status("Connection deleted")
+            self._delete_connection(conn_id)
+
+    def _on_sidebar_delete_by_id(self, sidebar, conn_id):
+        """Handle delete-requested signal from sidebar right-click menu."""
+        if conn_id:
+            self._delete_connection(conn_id)
+
+    def _delete_connection(self, conn_id):
+        """Delete a connection by ID."""
+        self.connection_manager.delete_connection(conn_id)
+        self.credential_store.delete_credentials(conn_id)
+        self.sidebar.refresh()
+        self._set_status("Connection deleted")
 
     def _on_sidebar_duplicate(self, action, param):
         conn_id = self.sidebar.get_selected_connection_id()
@@ -731,6 +748,22 @@ class MainWindow(Adw.ApplicationWindow):
         if self._cluster_window is not None:
             self._cluster_window.refresh()
 
+    def _on_clone_requested(self, panel, connection):
+        """Handle clone-requested signal by opening a full new connection tab."""
+        self.open_connection(connection.id)
+
+    def _cancel_askpass_timer(self, conn_id: str):
+        """Cancel any pending askpass cleanup timer for a connection."""
+        timer_id = self._askpass_cleanup_timers.pop(conn_id, None)
+        if timer_id is not None:
+            GLib.source_remove(timer_id)
+
+    def _askpass_timer_fired(self, conn_id: str):
+        """Callback for the delayed askpass cleanup timer."""
+        self._askpass_cleanup_timers.pop(conn_id, None)
+        self.ssh_handler.cleanup_askpass(conn_id)
+        return False  # don't repeat
+
     def _on_tab_removed(self, panel, terminal):
         self._update_tab_count()
         if self._cluster_window is not None:
@@ -738,6 +771,7 @@ class MainWindow(Adw.ApplicationWindow):
         # Clean up askpass if it was an SSH session
         conn = panel.get_terminal_connection(terminal)
         if conn:
+            self._cancel_askpass_timer(conn.id)
             self.ssh_handler.cleanup_askpass(conn.id)
 
     def _on_active_terminal_changed(self, panel, terminal):
@@ -906,6 +940,10 @@ class MainWindow(Adw.ApplicationWindow):
         if alloc.height > 0:
             self.config.set("window_height", alloc.height)
         self.config.save()
+
+        # Terminate all child processes in open terminals
+        for terminal in self.terminal_panel.get_all_terminals():
+            terminal.terminate()
 
         # Clean up SSH handler
         self.ssh_handler.cleanup_all()

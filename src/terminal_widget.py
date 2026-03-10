@@ -12,6 +12,9 @@ gi.require_version('Vte', '3.91')
 from gi.repository import Gtk, Vte, GLib, Gdk, Pango, GObject
 from typing import Optional
 
+import os
+import signal
+
 from .connection import Connection
 from .config import Config
 
@@ -67,6 +70,16 @@ class TerminalWidget(Gtk.Box):
         key_ctrl = Gtk.EventControllerKey()
         key_ctrl.connect("key-pressed", self._on_key_pressed)
         self.vte.add_controller(key_ctrl)
+
+        # Ctrl+Scroll to zoom font size
+        scroll_ctrl = Gtk.EventControllerScroll(
+            flags=Gtk.EventControllerScrollFlags.VERTICAL
+        )
+        scroll_ctrl.connect("scroll", self._on_scroll)
+        self.vte.add_controller(scroll_ctrl)
+
+        # Font scale tracking (1.0 = default)
+        self._font_scale = 1.0
 
         # Right-click menu
         self._setup_context_menu()
@@ -244,9 +257,23 @@ class TerminalWidget(Gtk.Box):
         """Focus the VTE terminal."""
         self.vte.grab_focus()
 
+    def terminate(self):
+        """Kill the child process running inside the terminal."""
+        pid = self._process_pid
+        if pid > 0:
+            try:
+                os.kill(pid, signal.SIGHUP)
+            except ProcessLookupError:
+                pass  # Already exited
+            except OSError as e:
+                print(f"Error killing process {pid}: {e}")
+            finally:
+                self._process_pid = -1
+
     # --- Signal handlers ---
 
     def _on_child_exited(self, terminal, status):
+        self._process_pid = -1  # Process already exited, clear PID
         self.emit("child-exited", status)
 
     def _on_title_changed(self, terminal):
@@ -266,23 +293,85 @@ class TerminalWidget(Gtk.Box):
                 self.paste_clipboard()
                 return True
 
+        # Ctrl+0 / Ctrl+KP_0: reset font size
+        if ctrl and keyval in (Gdk.KEY_0, Gdk.KEY_KP_0):
+            self._font_scale = 1.0
+            self.vte.set_font_scale(1.0)
+            return True
+
+        # Ctrl+Plus: zoom in
+        if ctrl and keyval in (Gdk.KEY_plus, Gdk.KEY_equal, Gdk.KEY_KP_Add):
+            self._font_scale = min(self._font_scale + 0.1, 4.0)
+            self.vte.set_font_scale(self._font_scale)
+            return True
+
+        # Ctrl+Minus: zoom out
+        if ctrl and keyval in (Gdk.KEY_minus, Gdk.KEY_KP_Subtract):
+            self._font_scale = max(self._font_scale - 0.1, 0.3)
+            self.vte.set_font_scale(self._font_scale)
+            return True
+
         return False
+
+    def _on_scroll(self, controller, dx, dy):
+        """Handle Ctrl+Scroll to zoom font size."""
+        state = controller.get_current_event_state()
+        if not (state & Gdk.ModifierType.CONTROL_MASK):
+            return False  # Let normal scrollback work
+
+        step = 0.1
+        if dy < 0:
+            # Scroll up → zoom in
+            self._font_scale = min(self._font_scale + step, 4.0)
+        elif dy > 0:
+            # Scroll down → zoom out
+            self._font_scale = max(self._font_scale - step, 0.3)
+
+        self.vte.set_font_scale(self._font_scale)
+        return True  # Consume the event
 
     def _setup_context_menu(self):
         """Set up right-click context menu."""
         click = Gtk.GestureClick(button=3)  # Right click
         click.connect("pressed", self._show_context_menu)
         self.vte.add_controller(click)
+        self._context_popover: Gtk.PopoverMenu | None = None
 
     def _show_context_menu(self, gesture, n_press, x, y):
         """Show the terminal context menu."""
+        # Clean up any previous popover
+        self._cleanup_context_popover()
+
         menu_model = self._build_context_menu()
         popover = Gtk.PopoverMenu(menu_model=menu_model)
         popover.set_parent(self.vte)
         popover.set_pointing_to(Gdk.Rectangle(int(x), int(y), 1, 1))
-
-        # We need to connect action handlers on the widget
+        popover.connect("closed", self._on_context_popover_closed)
+        self._context_popover = popover
         popover.popup()
+
+    def _cleanup_context_popover(self):
+        """Unparent and discard the current context popover if any."""
+        if self._context_popover is not None:
+            try:
+                self._context_popover.unparent()
+            except Exception:
+                pass
+            self._context_popover = None
+
+    def _on_context_popover_closed(self, popover):
+        """Schedule popover cleanup after GTK finishes its bookkeeping."""
+        GLib.idle_add(self._deferred_context_popover_cleanup, popover)
+
+    def _deferred_context_popover_cleanup(self, popover):
+        """Unparent the popover now that GTK state accounting is done."""
+        try:
+            popover.unparent()
+        except Exception:
+            pass
+        if self._context_popover is popover:
+            self._context_popover = None
+        return False
 
     def _build_context_menu(self):
         """Build the context menu model."""

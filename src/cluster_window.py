@@ -29,6 +29,7 @@ class ClusterWindow(Gtk.Window):
         self.set_default_size(480, 420)
         self.set_resizable(True)
 
+        self._parent_window = parent_window
         self._terminal_panel = terminal_panel
         # [(CheckButton, TerminalWidget)]
         self._checks: list[tuple[Gtk.CheckButton, object]] = []
@@ -37,11 +38,38 @@ class ClusterWindow(Gtk.Window):
 
         self._build_ui()
         self.connect("close-request", self._on_close_request)
+        self.connect("realize", self._on_realize)
 
         # History navigation: Ctrl+Up / Ctrl+Down
         key_ctrl = Gtk.EventControllerKey()
         key_ctrl.connect("key-pressed", self._on_entry_key_pressed)
         self._entry.add_controller(key_ctrl)
+
+    def _on_realize(self, widget):
+        """Position the cluster window near the top-right of the parent."""
+        GLib.idle_add(self._position_near_parent)
+
+    def _position_near_parent(self):
+        """Move the window close to the main window (works on X11; best-effort on Wayland)."""
+        try:
+            parent_surface = self._parent_window.get_surface()
+            my_surface = self.get_surface()
+            if parent_surface is None or my_surface is None:
+                return False
+
+            # Try X11 surface positioning
+            from gi.repository import GdkX11
+            if isinstance(parent_surface, GdkX11.X11Surface):
+                px, py = parent_surface.get_position()
+                parent_alloc = self._parent_window.get_allocation()
+                my_alloc = self.get_allocation()
+                # Place at top-right of parent, offset inward a bit
+                x = px + parent_alloc.width - my_alloc.width - 20
+                y = py + 60
+                my_surface.move(x, y)
+        except (ImportError, AttributeError, TypeError):
+            pass  # Wayland or unavailable – transient_for hint is the best we can do
+        return False
 
     # -----------------------------------------------------------------
     # UI construction

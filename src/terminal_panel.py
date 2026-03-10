@@ -11,7 +11,7 @@ Adapts gnome-connection-manager's split/tab approach to GTK4:
 import gi
 gi.require_version('Gtk', '4.0')
 
-from gi.repository import Gtk, GLib, GObject, Gdk, Gio
+from gi.repository import Gtk, GLib, GObject, Gdk, Gio, Graphene
 from typing import Optional
 
 from .terminal_widget import TerminalWidget
@@ -41,6 +41,7 @@ class TabLabel(Gtk.Box):
         "close-clicked": (GObject.SignalFlags.RUN_LAST, None, ()),
         "split-horizontal": (GObject.SignalFlags.RUN_LAST, None, ()),
         "split-vertical": (GObject.SignalFlags.RUN_LAST, None, ()),
+        "tab-clicked": (GObject.SignalFlags.RUN_LAST, None, ()),
     }
 
     def __init__(self, title: str = "Terminal", show_close: bool = True):
@@ -71,6 +72,14 @@ class TabLabel(Gtk.Box):
         mid_click = Gtk.GestureClick(button=2)
         mid_click.connect("pressed", lambda *_: self.emit("close-clicked"))
         self.add_controller(mid_click)
+
+        # Left-click to refocus terminal (covers clicking the already-active tab)
+        left_click = Gtk.GestureClick(button=1)
+        left_click.connect("released", lambda *_: self.emit("tab-clicked"))
+        self.add_controller(left_click)
+
+        # Track the active popover so we can clean it up
+        self._popover: Gtk.PopoverMenu | None = None
 
     def set_title(self, title: str):
         """Update the tab title."""
@@ -105,6 +114,26 @@ class TabLabel(Gtk.Box):
 
     def _on_right_click(self, gesture, n_press, x, y):
         """Show tab context menu."""
+        # Clean up any previous popover
+        self._cleanup_popover()
+
+        # Find the Notebook ancestor — parenting the popover to the tiny
+        # TabLabel causes GTK to compute negative sizes for internal menu
+        # GtkImage widgets.  The Notebook has plenty of allocation.
+        notebook = self._find_notebook()
+        if notebook is None:
+            return
+
+        # Convert click coordinates from TabLabel-local → Notebook-local
+        src_point = Graphene.Point()
+        src_point.x = float(x)
+        src_point.y = float(y)
+        ok, dest_point = self.compute_point(notebook, src_point)
+        if ok:
+            nx, ny = dest_point.x, dest_point.y
+        else:
+            nx, ny = float(x), float(y)
+
         menu_model = Gio.Menu()
 
         section1 = Gio.Menu()
@@ -123,8 +152,44 @@ class TabLabel(Gtk.Box):
         menu_model.append_section(None, section3)
 
         popover = Gtk.PopoverMenu(menu_model=menu_model)
-        popover.set_parent(self)
+        popover.set_has_arrow(False)
+        popover.set_parent(notebook)
+        popover.set_pointing_to(Gdk.Rectangle(int(nx), int(ny), 1, 1))
+        popover.connect("closed", self._on_popover_closed)
+        self._popover = popover
         popover.popup()
+
+    def _find_notebook(self):
+        """Walk up the widget tree to find the containing Notebook."""
+        widget = self.get_parent()
+        while widget is not None:
+            if isinstance(widget, Gtk.Notebook):
+                return widget
+            widget = widget.get_parent()
+        return None
+
+    def _cleanup_popover(self):
+        """Unparent and discard the current popover if any."""
+        if self._popover is not None:
+            try:
+                self._popover.unparent()
+            except Exception:
+                pass
+            self._popover = None
+
+    def _on_popover_closed(self, popover):
+        """Schedule popover cleanup after GTK finishes its bookkeeping."""
+        GLib.idle_add(self._deferred_popover_cleanup, popover)
+
+    def _deferred_popover_cleanup(self, popover):
+        """Unparent the popover now that GTK state accounting is done."""
+        try:
+            popover.unparent()
+        except Exception:
+            pass
+        if self._popover is popover:
+            self._popover = None
+        return False
 
 
 class TerminalPanel(Gtk.Box):
@@ -151,6 +216,7 @@ class TerminalPanel(Gtk.Box):
         "tab-removed": (GObject.SignalFlags.RUN_LAST, None, (object,)),
         "active-terminal-changed": (GObject.SignalFlags.RUN_LAST, None, (object,)),
         "terminal-title-changed": (GObject.SignalFlags.RUN_LAST, None, (object, str)),
+        "clone-requested": (GObject.SignalFlags.RUN_LAST, None, (object,)),
     }
 
     def __init__(self, config: Config):
@@ -251,6 +317,8 @@ class TerminalPanel(Gtk.Box):
         # Connect tab label signals — look up notebook at call time, not capture time
         tab_label.connect("close-clicked",
                           lambda _, t=terminal: self._close_tab_by_lookup(t))
+        tab_label.connect("tab-clicked",
+                          lambda _, t=terminal: GLib.idle_add(t.grab_focus))
 
         # Track the terminal
         self._terminals[terminal] = (connection, tab_label, nb)
@@ -500,6 +568,8 @@ class TerminalPanel(Gtk.Box):
             )
             new_tab_label.connect("close-clicked",
                                   lambda _, t=child_ref: self._close_tab_by_lookup(t))
+            new_tab_label.connect("tab-clicked",
+                                  lambda _, t=child_ref: GLib.idle_add(t.grab_focus))
             self._terminals[child_ref] = (conn, new_tab_label, new_nb)
 
             new_nb.append_page(child_ref, new_tab_label)
@@ -578,6 +648,8 @@ class TerminalPanel(Gtk.Box):
                 )
                 new_label.connect("close-clicked",
                                   lambda _, t=child_widget: self._close_tab_by_lookup(t))
+                new_label.connect("tab-clicked",
+                                  lambda _, t=child_widget: GLib.idle_add(t.grab_focus))
                 self._terminals[child_widget] = (
                     tab_info[0] if tab_info else None,
                     new_label,
@@ -673,15 +745,22 @@ class TerminalPanel(Gtk.Box):
                 self.emit("tab-added", self.focused_terminal)
 
     def clone_current_tab(self):
-        """Clone the current tab, opening a new one with the same connection."""
+        """Request cloning the current tab.
+
+        Emits 'clone-requested' with the connection so the window can
+        create a fully-functional new tab (including spawning the process).
+        For local (no connection) terminals, opens a new local tab directly.
+        """
         if self.focused_terminal and self.focused_terminal in self._terminals:
             conn, tab_label, nb = self._terminals[self.focused_terminal]
-            # Signal the window to create a new connection tab
-            # We'll handle this via the tab-added signal with a clone marker
             if conn:
-                new_terminal = TerminalWidget(self.config, conn)
-                title = tab_label.get_title() if tab_label else conn.name or "Terminal"
-                self.add_tab(new_terminal, conn, f"{title} (clone)")
+                self.emit("clone-requested", conn)
+            else:
+                # Local shell: clone by opening a new local terminal
+                new_terminal = TerminalWidget(self.config)
+                self.add_tab(new_terminal, None, "Local")
+                from .ssh_handler import SSHHandler
+                new_terminal.spawn_command(SSHHandler.get_local_shell_command())
 
     # =====================================================================
     # Cluster Mode
@@ -733,9 +812,14 @@ class TerminalPanel(Gtk.Box):
         """Deferred cleanup after page removal."""
         if child.get_parent() is None:
             # Terminal was actually closed (not moved via DnD)
+            # Terminate the child process first
+            if isinstance(child, TerminalWidget):
+                child.terminate()
+            # Emit tab-removed BEFORE removing from tracking so
+            # handlers can still look up connection info.
+            self.emit("tab-removed", child)
             if child in self._terminals:
                 del self._terminals[child]
-            self.emit("tab-removed", child)
 
         # Check if notebook is now empty
         self._check_notebook_empty(notebook)
@@ -747,6 +831,7 @@ class TerminalPanel(Gtk.Box):
             self.focused_terminal = child
             self.focused_notebook = notebook
             self.emit("active-terminal-changed", child)
+            GLib.idle_add(child.grab_focus)
 
     def _on_create_window(self, notebook, page, x, y):
         """

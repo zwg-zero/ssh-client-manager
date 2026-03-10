@@ -171,7 +171,7 @@ class ConnectionManager:
         """Persist connections to JSON file."""
         data = {
             "connections": [asdict(c) for c in self._connections],
-            "groups": sorted(set(self._groups)),
+            "groups": list(dict.fromkeys(self._groups)),  # dedupe, preserve order
         }
         try:
             with open(self._file, "w") as f:
@@ -215,6 +215,36 @@ class ConnectionManager:
     def get_connections(self) -> list[Connection]:
         """Get all connections."""
         return list(self._connections)
+
+    def reorder_connections(self, ordered_ids: list[str]):
+        """Reorder connections to match the given ID list.
+
+        IDs not in the list are appended at the end in their original order.
+        """
+        id_to_conn = {c.id: c for c in self._connections}
+        reordered = []
+        for cid in ordered_ids:
+            if cid in id_to_conn:
+                reordered.append(id_to_conn.pop(cid))
+        # Append any remaining connections not in the ordered list
+        for c in self._connections:
+            if c.id in id_to_conn:
+                reordered.append(c)
+        self._connections = reordered
+        self.save()
+
+    def reorder_groups(self, ordered_groups: list[str]):
+        """Reorder groups to match the given list.
+
+        Groups not in the list are appended at the end.
+        """
+        existing = set(self._groups)
+        reordered = [g for g in ordered_groups if g in existing]
+        for g in self._groups:
+            if g not in reordered:
+                reordered.append(g)
+        self._groups = reordered
+        self.save()
 
     def get_connections_in_group(self, group: str) -> list[Connection]:
         """Get all connections in a specific group."""
@@ -261,8 +291,8 @@ class ConnectionManager:
         self.save()
 
     def get_groups(self) -> list[str]:
-        """Get all groups, sorted."""
-        return sorted(set(self._groups))
+        """Get all groups, preserving creation order."""
+        return list(dict.fromkeys(self._groups))
 
     def get_group_tree(self) -> dict:
         """

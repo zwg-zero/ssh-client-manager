@@ -139,10 +139,17 @@ class ConnectionDialog(Adw.Window):
 
         scrolled_cmd = Gtk.ScrolledWindow()
         scrolled_cmd.set_min_content_height(72)
-        scrolled_cmd.set_max_content_height(120)
+        scrolled_cmd.set_max_content_height(200)
+        scrolled_cmd.set_propagate_natural_height(True)
         scrolled_cmd.set_child(self.textview_command)
         scrolled_cmd.add_css_class("card")
         box.append(scrolled_cmd)
+
+        # Dynamically resize the command area as content changes
+        self.textview_command.get_buffer().connect(
+            "changed", lambda buf: self._resize_command_area(scrolled_cmd)
+        )
+        self._scrolled_cmd = scrolled_cmd
 
         box.append(Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL))
 
@@ -277,6 +284,20 @@ class ConnectionDialog(Adw.Window):
         """When a group is selected from combo, clear the new group entry."""
         if combo.get_active() > 0:
             self.entry_group.set_text("")
+
+    def _resize_command_area(self, scrolled_window):
+        """Dynamically adjust the command text area height to fit content."""
+        buf = self.textview_command.get_buffer()
+        line_count = buf.get_line_count()
+        # Approximate line height: use font metrics or a reasonable default
+        # A monospace font at default size is roughly 20px per line
+        line_height = 20
+        padding = 12  # top + bottom margins/padding
+        natural = line_count * line_height + padding
+        min_h = 72
+        max_h = 200
+        target = max(min_h, min(natural, max_h))
+        scrolled_window.set_min_content_height(target)
 
     # -----------------------------------------------------------------
     # Populate (edit mode)
