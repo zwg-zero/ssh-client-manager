@@ -480,11 +480,22 @@ class Sidebar(Gtk.Box):
             self.refresh()
 
     def _duplicate_connection(self, conn_id: str):
-        """Duplicate a connection."""
+        """Duplicate a connection, including stored credentials."""
         conn = self.connection_manager.get_connection(conn_id)
         if conn:
             clone = conn.clone()
             self.connection_manager.add_connection(clone)
+            # Copy credentials (password, passphrases) to the cloned connection
+            if self.credential_store:
+                pw = self.credential_store.get_password(conn_id)
+                if pw:
+                    self.credential_store.store_password(clone.id, pw)
+                pp1 = self.credential_store.get_passphrase1(conn_id)
+                if pp1:
+                    self.credential_store.store_passphrase1(clone.id, pp1)
+                pp2 = self.credential_store.get_passphrase2(conn_id)
+                if pp2:
+                    self.credential_store.store_passphrase2(clone.id, pp2)
             self.refresh()
 
     def _on_search_changed(self, entry):
