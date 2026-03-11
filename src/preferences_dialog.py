@@ -55,6 +55,7 @@ class PreferencesDialog(Adw.Window):
         self.spin_scrollback.set_range(100, 1000000)
         self.spin_scrollback.set_value(config["terminal_scrollback_lines"])
         self.spin_scrollback.set_increments(100, 1000)
+        self._disable_scroll(self.spin_scrollback)
         content.append(self._pref_row("Scrollback Lines:", self.spin_scrollback))
 
         # Background color
@@ -100,18 +101,21 @@ class PreferencesDialog(Adw.Window):
         self.spin_default_port.set_range(1, 65535)
         self.spin_default_port.set_value(config["ssh_default_port"])
         self.spin_default_port.set_increments(1, 10)
+        self._disable_scroll(self.spin_default_port)
         content.append(self._pref_row("Default Port:", self.spin_default_port))
 
         self.spin_keepalive = Gtk.SpinButton()
         self.spin_keepalive.set_range(0, 3600)
         self.spin_keepalive.set_value(config["ssh_keepalive_interval"])
         self.spin_keepalive.set_increments(10, 60)
+        self._disable_scroll(self.spin_keepalive)
         content.append(self._pref_row("Keepalive Interval:", self.spin_keepalive))
 
         self.spin_timeout = Gtk.SpinButton()
         self.spin_timeout.set_range(5, 300)
         self.spin_timeout.set_value(config["ssh_connection_timeout"])
         self.spin_timeout.set_increments(5, 30)
+        self._disable_scroll(self.spin_timeout)
         content.append(self._pref_row("Connection Timeout:", self.spin_timeout))
 
         # SSH config edit command
@@ -164,6 +168,16 @@ class PreferencesDialog(Adw.Window):
         label.add_css_class("heading")
         label.set_margin_top(8)
         return label
+
+    @staticmethod
+    def _disable_scroll(widget: Gtk.Widget):
+        """Prevent mouse wheel from changing the value of a SpinButton."""
+        scroll = Gtk.EventControllerScroll(
+            flags=Gtk.EventControllerScrollFlags.VERTICAL
+        )
+        scroll.set_propagation_phase(Gtk.PropagationPhase.CAPTURE)
+        scroll.connect("scroll", lambda *_: True)  # swallow the event
+        widget.add_controller(scroll)
 
     def _pref_row(self, label_text: str, widget: Gtk.Widget) -> Gtk.Box:
         """Create a preference row with label and widget."""

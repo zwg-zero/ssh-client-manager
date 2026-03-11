@@ -58,8 +58,9 @@ class MainWindow(Adw.ApplicationWindow):
         self.credential_store = CredentialStore()
         self.ssh_handler = SSHHandler(self.credential_store)
 
-        # Track pending askpass cleanup timers by connection_id
-        self._askpass_cleanup_timers: dict[str, int] = {}
+        # Track pending askpass cleanup timers by terminal id
+        self._askpass_cleanup_timers: dict[int, int] = {}  # id(terminal) -> GLib timer id
+        self._askpass_script_paths: dict[int, tuple[str, str]] = {}  # id(terminal) -> (script_path, conn_id)
 
         # Cluster mode state
         self._cluster_mode = False
@@ -315,6 +316,13 @@ class MainWindow(Adw.ApplicationWindow):
         ssh_cmd = self.ssh_handler.build_ssh_command(conn)
         env = self.ssh_handler.build_environment(conn)
 
+        # Extract the askpass script path from the environment for cleanup later
+        askpass_script = None
+        for var in env:
+            if var.startswith("SSH_ASKPASS="):
+                askpass_script = var.split("=", 1)[1]
+                break
+
         # Add tab
         title = conn.name or conn.display_name()
         self.terminal_panel.add_tab(terminal, conn, title)
@@ -327,10 +335,13 @@ class MainWindow(Adw.ApplicationWindow):
         if commands:
             self._schedule_post_login_commands(terminal, commands)
 
-        # Clean up askpass script after delay (cancel any existing timer first)
-        self._cancel_askpass_timer(conn.id)
-        timer_id = GLib.timeout_add(15000, self._askpass_timer_fired, conn.id)
-        self._askpass_cleanup_timers[conn.id] = timer_id
+        # Clean up askpass script after delay, keyed by terminal instance
+        tid = id(terminal)
+        if askpass_script:
+            self._askpass_script_paths[tid] = (askpass_script, conn.id)
+        self._cancel_askpass_timer(tid)
+        timer_id = GLib.timeout_add(15000, self._askpass_timer_fired, tid)
+        self._askpass_cleanup_timers[tid] = timer_id
 
         self._set_status(f"Connected: {conn.name}")
 
@@ -838,16 +849,20 @@ class MainWindow(Adw.ApplicationWindow):
         """Handle clone-requested signal by opening a full new connection tab."""
         self.open_connection(connection.id)
 
-    def _cancel_askpass_timer(self, conn_id: str):
-        """Cancel any pending askpass cleanup timer for a connection."""
-        timer_id = self._askpass_cleanup_timers.pop(conn_id, None)
+    def _cancel_askpass_timer(self, terminal_id: int):
+        """Cancel any pending askpass cleanup timer for a terminal."""
+        timer_id = self._askpass_cleanup_timers.pop(terminal_id, None)
         if timer_id is not None:
             GLib.source_remove(timer_id)
 
-    def _askpass_timer_fired(self, conn_id: str):
+    def _askpass_timer_fired(self, terminal_id: int):
         """Callback for the delayed askpass cleanup timer."""
-        self._askpass_cleanup_timers.pop(conn_id, None)
-        self.ssh_handler.cleanup_askpass(conn_id)
+        self._askpass_cleanup_timers.pop(terminal_id, None)
+        info = self._askpass_script_paths.pop(terminal_id, None)
+        if info:
+            script_path, conn_id = info
+            self.ssh_handler.cleanup_askpass_script(script_path)
+            self.ssh_handler.cleanup_askpass_counter(conn_id)
         return False  # don't repeat
 
     def _on_tab_removed(self, panel, terminal):
@@ -855,10 +870,13 @@ class MainWindow(Adw.ApplicationWindow):
         if self._cluster_window is not None:
             self._cluster_window.refresh()
         # Clean up askpass if it was an SSH session
-        conn = panel.get_terminal_connection(terminal)
-        if conn:
-            self._cancel_askpass_timer(conn.id)
-            self.ssh_handler.cleanup_askpass(conn.id)
+        tid = id(terminal)
+        self._cancel_askpass_timer(tid)
+        info = self._askpass_script_paths.pop(tid, None)
+        if info:
+            script_path, conn_id = info
+            self.ssh_handler.cleanup_askpass_script(script_path)
+            self.ssh_handler.cleanup_askpass_counter(conn_id)
 
     def _on_active_terminal_changed(self, panel, terminal):
         conn = panel.get_terminal_connection(terminal)

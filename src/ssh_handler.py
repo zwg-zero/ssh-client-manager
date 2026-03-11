@@ -10,6 +10,7 @@ import os
 import stat
 import tempfile
 import shutil
+import uuid
 from pathlib import Path
 from typing import Optional
 
@@ -30,7 +31,7 @@ class SSHHandler:
 
     def __init__(self, credential_store: CredentialStore):
         self._cred_store = credential_store
-        self._askpass_scripts: dict[str, str] = {}  # connection_id -> script path
+        self._all_scripts: set[str] = set()  # all created script paths for cleanup_all
         self._askpass_dir = Path(tempfile.mkdtemp(prefix="ssh-cm-askpass-"))
         os.chmod(str(self._askpass_dir), stat.S_IRWXU)  # 0700
 
@@ -166,9 +167,12 @@ class SSHHandler:
         script_content = "\n".join(script_lines) + "\n"
 
         # Write to temp file with restricted permissions
+        # Use a UUID suffix so each connection attempt gets a unique file,
+        # avoiding race conditions when closing and reopening quickly.
+        unique_id = uuid.uuid4().hex[:8]
         script_path = os.path.join(
             str(self._askpass_dir),
-            f"askpass-{connection.id[:8]}"
+            f"askpass-{connection.id[:8]}-{unique_id}"
         )
 
         fd = os.open(script_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC,
@@ -176,18 +180,20 @@ class SSHHandler:
         with os.fdopen(fd, "w") as f:
             f.write(script_content)
 
-        self._askpass_scripts[connection.id] = script_path
+        self._all_scripts.add(script_path)
         return script_path
 
-    def cleanup_askpass(self, connection_id: str):
-        """Remove the askpass script and counter file for a connection."""
-        if connection_id in self._askpass_scripts:
-            script_path = self._askpass_scripts.pop(connection_id)
+    def cleanup_askpass_script(self, script_path: str):
+        """Remove a specific askpass script file."""
+        if script_path:
+            self._all_scripts.discard(script_path)
             try:
                 os.unlink(script_path)
             except OSError:
                 pass
-        # Remove passphrase counter file
+
+    def cleanup_askpass_counter(self, connection_id: str):
+        """Remove the passphrase counter file for a connection."""
         counter = f"/tmp/.ssh-cm-askpass-counter-{connection_id[:8]}"
         try:
             os.unlink(counter)
@@ -196,12 +202,12 @@ class SSHHandler:
 
     def cleanup_all(self):
         """Remove all askpass scripts and the temp directory."""
-        for script_path in self._askpass_scripts.values():
+        for script_path in self._all_scripts:
             try:
                 os.unlink(script_path)
             except OSError:
                 pass
-        self._askpass_scripts.clear()
+        self._all_scripts.clear()
         try:
             shutil.rmtree(str(self._askpass_dir), ignore_errors=True)
         except OSError:
