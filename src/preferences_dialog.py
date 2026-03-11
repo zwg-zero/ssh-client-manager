@@ -114,6 +114,11 @@ class PreferencesDialog(Adw.Window):
         self.spin_timeout.set_increments(5, 30)
         content.append(self._pref_row("Connection Timeout:", self.spin_timeout))
 
+        # SSH config edit command
+        self.entry_ssh_config_cmd = Gtk.Entry(text=config["ssh_config_edit_command"])
+        self.entry_ssh_config_cmd.set_placeholder_text("vim ~/.ssh/config")
+        content.append(self._pref_row("SSH Config Edit Cmd:", self.entry_ssh_config_cmd))
+
         content.append(Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL))
 
         # === Behavior Section ===
@@ -190,6 +195,7 @@ class PreferencesDialog(Adw.Window):
         cfg.set("ssh_default_port", int(self.spin_default_port.get_value()))
         cfg.set("ssh_keepalive_interval", int(self.spin_keepalive.get_value()))
         cfg.set("ssh_connection_timeout", int(self.spin_timeout.get_value()))
+        cfg.set("ssh_config_edit_command", self.entry_ssh_config_cmd.get_text())
         cfg.set("confirm_close_tab", self.switch_confirm_close_tab.get_active())
         cfg.set("confirm_close_window", self.switch_confirm_close_window.get_active())
         cfg.set("show_tab_close_button", self.switch_tab_close_btn.get_active())

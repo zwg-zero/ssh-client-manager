@@ -78,6 +78,7 @@ class MainWindow(Adw.ApplicationWindow):
         actions = {
             "new-connection": self._on_new_connection,
             "new-local": self._on_new_local_terminal,
+            "edit-ssh-config": self._on_edit_ssh_config,
             "connect-selected": self._on_connect_selected,
             "preferences": self._on_preferences,
             "split-h": self._on_split_horizontal,
@@ -244,6 +245,7 @@ class MainWindow(Adw.ApplicationWindow):
         section1 = Gio.Menu()
         section1.append("New Connection", "win.new-connection")
         section1.append("New Local Terminal", "win.new-local")
+        section1.append("Edit SSH Config File", "win.edit-ssh-config")
         menu.append_section(None, section1)
 
         section2 = Gio.Menu()
@@ -442,6 +444,19 @@ class MainWindow(Adw.ApplicationWindow):
     def _on_new_local_terminal(self, action, param):
         """Open a new local terminal."""
         self.open_local_terminal()
+
+    def _on_edit_ssh_config(self, action, param):
+        """Open a local terminal and run the SSH config edit command."""
+        cmd = self.config["ssh_config_edit_command"].strip()
+        if not cmd:
+            cmd = "vim ~/.ssh/config"
+        terminal = TerminalWidget(self.config)
+        shell_cmd = SSHHandler.get_local_shell_command()
+        self.terminal_panel.add_tab(terminal, None, "SSH Config")
+        terminal.spawn_command(shell_cmd)
+        # Send the edit command shortly after the shell starts
+        GLib.timeout_add(200, lambda: (terminal.feed_child(cmd + "\n"), False)[1])
+        self._set_status("Editing SSH config file")
 
     def _on_connect_selected(self, action, param):
         """Connect to the selected connection in sidebar."""

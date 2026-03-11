@@ -49,6 +49,7 @@ DEFAULTS = {
     "ssh_default_port": 22,
     "ssh_keepalive_interval": 60,
     "ssh_connection_timeout": 30,
+    "ssh_config_edit_command": "vim ~/.ssh/config",
     # Behavior
     "confirm_close_tab": True,
     "confirm_close_window": True,
