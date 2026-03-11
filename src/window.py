@@ -155,7 +155,9 @@ class MainWindow(Adw.ApplicationWindow):
         self.paned.set_position(self.config["sidebar_width"])
 
         # Sidebar
-        self.sidebar = Sidebar(self.connection_manager, self.credential_store)
+        saved_expanded = self.config.get("sidebar_expanded_groups", [])
+        self.sidebar = Sidebar(self.connection_manager, self.credential_store,
+                               initial_expanded_groups=saved_expanded)
 
         # Terminal panel
         self.terminal_panel = TerminalPanel(self.config)
@@ -711,7 +713,7 @@ class MainWindow(Adw.ApplicationWindow):
             group_name = entry.get_text().strip()
             if group_name:
                 self.connection_manager.add_group(group_name)
-                self.sidebar.refresh()
+                self.sidebar.refresh(expand_group=group_name)
                 self._set_status(f"Group added: {group_name}")
 
     def _on_delete_group(self, action, param):
@@ -934,6 +936,8 @@ class MainWindow(Adw.ApplicationWindow):
         """Handle window close request."""
         # Save window state
         self.config.set("sidebar_width", self.paned.get_position())
+        self.config.set("sidebar_expanded_groups",
+                        list(self.sidebar.get_expanded_groups()))
         alloc = self.get_allocation()
         if alloc.width > 0:
             self.config.set("window_width", alloc.width)

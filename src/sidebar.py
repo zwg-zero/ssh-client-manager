@@ -43,10 +43,13 @@ class Sidebar(Gtk.Box):
         "add-group-requested": (GObject.SignalFlags.RUN_LAST, None, ()),
     }
 
-    def __init__(self, connection_manager: ConnectionManager, credential_store=None):
+    def __init__(self, connection_manager: ConnectionManager, credential_store=None,
+                 initial_expanded_groups: list = None):
         super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=0)
         self.connection_manager = connection_manager
         self.credential_store = credential_store
+        # Groups to expand on first load (from saved config); None means no memory yet
+        self._initial_expanded_groups = set(initial_expanded_groups) if initial_expanded_groups else None
 
         self.set_size_request(200, -1)
         self.add_css_class("sidebar")
@@ -167,9 +170,20 @@ class Sidebar(Gtk.Box):
         # Initial population
         self.refresh()
 
-    def refresh(self):
-        """Rebuild the tree from the connection manager."""
+    def refresh(self, expand_group: str = None):
+        """Rebuild the tree from the connection manager.
+
+        Args:
+            expand_group: If set, ensure this group path (and its parents)
+                          are expanded after refresh.  Other groups keep
+                          their previous expanded/collapsed state.
+        """
         self._refreshing = True
+
+        # Save current expanded state before clearing
+        expanded_groups = self.get_expanded_groups()
+        first_load = len(expanded_groups) == 0 and self.store.iter_n_children(None) == 0
+
         self.store.clear()
 
         # Build group structure and connection placement
@@ -220,11 +234,58 @@ class Sidebar(Gtk.Box):
                 True,                              # visible
             ])
 
-        # Expand all by default
-        self.tree_view.expand_all()
+        # Restore expanded state
+        if first_load and self._initial_expanded_groups is not None:
+            # First load with saved state from previous session
+            self._restore_expanded_groups(self._initial_expanded_groups, group_iters)
+            self._initial_expanded_groups = None  # consumed
+        elif first_load:
+            # Very first run ever — no saved state, don't expand anything
+            pass
+        else:
+            self._restore_expanded_groups(expanded_groups, group_iters)
+            # Expand the newly added group and its parents
+            if expand_group:
+                self._expand_group_path(expand_group, group_iters)
         self._refreshing = False
         # Capture the tree structure as the baseline for DnD validation
         self._pre_dnd_snapshot = self._take_snapshot()
+
+    def get_expanded_groups(self) -> set:
+        """Return a set of group paths that are currently expanded.
+
+        This is public so the window can persist the state on close.
+        """
+        expanded = set()
+        def _walk(parent_iter):
+            n = self.store.iter_n_children(parent_iter)
+            for i in range(n):
+                child = self.store.iter_nth_child(parent_iter, i)
+                is_group = self.store.get_value(child, COL_IS_GROUP)
+                if is_group:
+                    tree_path = self.store.get_path(child)
+                    if self.tree_view.row_expanded(tree_path):
+                        expanded.add(self.store.get_value(child, COL_GROUP_PATH))
+                    _walk(child)
+        _walk(None)
+        return expanded
+
+    def _restore_expanded_groups(self, expanded: set, group_iters: dict):
+        """Expand groups that were previously expanded."""
+        for group_path, iter_ in group_iters.items():
+            if group_path in expanded:
+                tree_path = self.store.get_path(iter_)
+                self.tree_view.expand_row(tree_path, False)
+
+    def _expand_group_path(self, group_path: str, group_iters: dict):
+        """Expand a group path and all its parent groups."""
+        parts = group_path.split("/")
+        for i in range(len(parts)):
+            partial = "/".join(parts[:i + 1])
+            iter_ = group_iters.get(partial)
+            if iter_:
+                tree_path = self.store.get_path(iter_)
+                self.tree_view.expand_row(tree_path, False)
 
     def get_selected_connection_id(self) -> Optional[str]:
         """Get the connection ID of the selected row, or None."""
