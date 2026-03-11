@@ -41,6 +41,7 @@ class Sidebar(Gtk.Box):
         "add-requested": (GObject.SignalFlags.RUN_LAST, None, ()),
         "delete-requested": (GObject.SignalFlags.RUN_LAST, None, (str,)),
         "add-group-requested": (GObject.SignalFlags.RUN_LAST, None, ()),
+        "duplicate-group-requested": (GObject.SignalFlags.RUN_LAST, None, (str,)),
     }
 
     def __init__(self, connection_manager: ConnectionManager, credential_store=None,
@@ -470,9 +471,11 @@ class Sidebar(Gtk.Box):
             conn_id = self.store.get_value(iter_, COL_CONNECTION_ID)
 
             if is_group:
+                group_path = self.store.get_value(iter_, COL_GROUP_PATH)
                 items = [
                     ("Add Connection Here", lambda _: self.emit("add-requested")),
                     ("Add Subgroup", lambda _: self.emit("add-group-requested")),
+                    ("Duplicate Group", lambda _, gp=group_path: self.emit("duplicate-group-requested", gp)),
                     ("Delete Group", lambda _: self._delete_selected_group()),
                 ]
             else:

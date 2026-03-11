@@ -274,6 +274,8 @@ class MainWindow(Adw.ApplicationWindow):
                              lambda _: self._on_add_group())
         self.sidebar.connect("delete-requested",
                              self._on_sidebar_delete_by_id)
+        self.sidebar.connect("duplicate-group-requested",
+                             lambda _, gp: self._on_duplicate_group(gp))
 
         # Terminal panel signals
         self.terminal_panel.connect("tab-added", self._on_tab_added)
@@ -722,6 +724,73 @@ class MainWindow(Adw.ApplicationWindow):
             self.connection_manager.delete_group(group_path, delete_connections=False)
             self.sidebar.refresh()
             self._set_status(f"Group deleted: {group_path}")
+
+    def _on_duplicate_group(self, source_group: str):
+        """Show a dialog to duplicate a group with all its connections."""
+        dialog = Adw.MessageDialog(
+            transient_for=self,
+            heading="Duplicate Group",
+            body=f'Enter a name for the new group (copy of "{source_group}"):',
+        )
+        dialog.add_response("cancel", "Cancel")
+        dialog.add_response("duplicate", "Duplicate")
+        dialog.set_response_appearance("duplicate", Adw.ResponseAppearance.SUGGESTED)
+
+        entry = Gtk.Entry()
+        entry.set_placeholder_text("Target Group Name")
+        entry.set_text(f"{source_group} (copy)")
+        entry.set_margin_start(12)
+        entry.set_margin_end(12)
+        dialog.set_extra_child(entry)
+
+        dialog.connect("response", lambda d, r: self._on_duplicate_group_response(
+            d, r, entry, source_group))
+        dialog.present()
+
+    def _on_duplicate_group_response(self, dialog, response, entry, source_group: str):
+        """Handle the duplicate group dialog response."""
+        if response == "duplicate":
+            target_group = entry.get_text().strip()
+            if not target_group:
+                return
+
+            # Check if target group already exists
+            existing_groups = self.connection_manager.get_groups()
+            if target_group in existing_groups:
+                err = Adw.MessageDialog(
+                    transient_for=self,
+                    heading="Error",
+                    body=f'Group "{target_group}" already exists. Please choose a different name.',
+                )
+                err.add_response("ok", "OK")
+                err.present()
+                return
+
+            # Create the target group
+            self.connection_manager.add_group(target_group)
+
+            # Copy all connections from source group to target group
+            connections = self.connection_manager.get_connections_in_group(source_group)
+            for conn in connections:
+                clone = conn.clone()
+                clone.name = conn.name  # keep original name (clone() appends " (copy)")
+                clone.group = target_group
+                self.connection_manager.add_connection(clone)
+
+                # Copy credentials to the cloned connection
+                if self.credential_store:
+                    pw = self.credential_store.get_password(conn.id)
+                    if pw:
+                        self.credential_store.store_password(clone.id, pw)
+                    pp1 = self.credential_store.get_passphrase1(conn.id)
+                    if pp1:
+                        self.credential_store.store_passphrase1(clone.id, pp1)
+                    pp2 = self.credential_store.get_passphrase2(conn.id)
+                    if pp2:
+                        self.credential_store.store_passphrase2(clone.id, pp2)
+
+            self.sidebar.refresh(expand_group=target_group)
+            self._set_status(f'Group duplicated: "{source_group}" → "{target_group}" ({len(connections)} connections)')
 
     def _edit_connection(self, connection_id: str):
         """Open the edit dialog for a connection."""
