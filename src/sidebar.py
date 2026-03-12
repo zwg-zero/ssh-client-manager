@@ -106,6 +106,8 @@ class Sidebar(Gtk.Box):
         self.store = Gtk.TreeStore(str, str, str, str, bool, str, bool)
 
         self._search_text = ""
+        self._pre_search_expanded = None  # expanded groups saved before search
+        self._search_selected_groups = set()  # groups of connections clicked during search
 
         # Use the store directly (no filter model) so DnD reordering works
         self.tree_view = Gtk.TreeView(model=self.store)
@@ -141,6 +143,9 @@ class Sidebar(Gtk.Box):
         column.add_attribute(text_renderer, "visible", COL_VISIBLE)
 
         self.tree_view.append_column(column)
+
+        # Selection change to track clicked connections during search
+        self.tree_view.get_selection().connect("changed", self._on_selection_changed)
 
         # Double-click to connect
         self.tree_view.connect("row-activated", self._on_row_activated)
@@ -439,6 +444,19 @@ class Sidebar(Gtk.Box):
 
     # --- Signal handlers ---
 
+    def _on_selection_changed(self, selection):
+        """Track which connection groups are selected during search."""
+        if not self._search_text:
+            return
+        model, iter_ = selection.get_selected()
+        if iter_ and not model.get_value(iter_, COL_IS_GROUP):
+            group = model.get_value(iter_, COL_GROUP_PATH)
+            if group:
+                # Add the group and all its parent groups
+                parts = group.split("/")
+                for i in range(len(parts)):
+                    self._search_selected_groups.add("/".join(parts[:i + 1]))
+
     def _on_row_activated(self, tree_view, path, column):
         """Handle double-click on a row."""
         iter_ = self.store.get_iter(path)
@@ -572,18 +590,43 @@ class Sidebar(Gtk.Box):
 
         Uses the COL_VISIBLE column to toggle cell renderer visibility.
         Groups are visible if they or any descendant matches.
-        When searching, all matching rows are expanded so they are visible.
+        First-level groups are always shown.
+        When searching, only groups with hits are expanded; others keep
+        their previous state.  When the search is cleared the original
+        expanded state is restored.
         """
         if not self._search_text:
-            # No search — make everything visible
+            # No search — make everything visible and restore expand state
             self._set_all_visible(self.store, None, True)
-            self.tree_view.expand_all()
+            if self._pre_search_expanded is not None:
+                self.tree_view.collapse_all()
+                # Merge groups of connections clicked during search
+                groups_to_expand = self._pre_search_expanded | self._search_selected_groups
+                self._restore_expanded_from_set(groups_to_expand)
+                self._pre_search_expanded = None
+                self._search_selected_groups = set()
             return
 
+        # Save expanded state once when a search begins
+        if self._pre_search_expanded is None:
+            self._pre_search_expanded = self.get_expanded_groups()
+
         # Walk the tree bottom-up: a row is visible if it matches
-        # or if any child is visible.
-        self._update_visibility(self.store, None)
-        self.tree_view.expand_all()
+        # or if any child is visible.  First-level groups are always visible.
+        hit_groups = set()
+        self._update_visibility(self.store, None, hit_groups=hit_groups)
+
+        # Ensure first-level groups are always visible
+        iter_ = self.store.iter_children(None)
+        while iter_:
+            self.store.set_value(iter_, COL_VISIBLE, True)
+            iter_ = self.store.iter_next(iter_)
+
+        # Collapse everything first, then expand only hit groups
+        # (plus groups that were already expanded before the search)
+        self.tree_view.collapse_all()
+        self._restore_expanded_from_set(self._pre_search_expanded)
+        self._expand_hit_groups(hit_groups)
 
     def _set_all_visible(self, model, parent_iter, visible):
         """Set visibility on all rows."""
@@ -593,8 +636,13 @@ class Sidebar(Gtk.Box):
             self._set_all_visible(model, iter_, visible)
             iter_ = model.iter_next(iter_)
 
-    def _update_visibility(self, model, parent_iter) -> bool:
-        """Update COL_VISIBLE for search. Returns True if any child is visible."""
+    def _update_visibility(self, model, parent_iter, hit_groups: set = None) -> bool:
+        """Update COL_VISIBLE for search. Returns True if any child is visible.
+
+        Args:
+            hit_groups: If provided, group paths with matching descendants
+                        will be added to this set.
+        """
         any_visible = False
         iter_ = model.iter_children(parent_iter)
         while iter_:
@@ -605,8 +653,10 @@ class Sidebar(Gtk.Box):
 
             if is_group:
                 # A group is visible if it matches or any descendant matches
-                child_visible = self._update_visibility(model, iter_)
+                child_visible = self._update_visibility(model, iter_, hit_groups)
                 visible = matches or child_visible
+                if visible and hit_groups is not None:
+                    hit_groups.add(model.get_value(iter_, COL_GROUP_PATH))
             else:
                 visible = matches
 
@@ -615,3 +665,31 @@ class Sidebar(Gtk.Box):
                 any_visible = True
             iter_ = model.iter_next(iter_)
         return any_visible
+
+    def _restore_expanded_from_set(self, expanded: set):
+        """Expand groups whose paths are in *expanded* (walks the store)."""
+        def _walk(parent_iter):
+            iter_ = self.store.iter_children(parent_iter)
+            while iter_:
+                if self.store.get_value(iter_, COL_IS_GROUP):
+                    gp = self.store.get_value(iter_, COL_GROUP_PATH)
+                    if gp in expanded:
+                        tp = self.store.get_path(iter_)
+                        self.tree_view.expand_row(tp, False)
+                    _walk(iter_)
+                iter_ = self.store.iter_next(iter_)
+        _walk(None)
+
+    def _expand_hit_groups(self, hit_groups: set):
+        """Expand groups that contain search hits."""
+        def _walk(parent_iter):
+            iter_ = self.store.iter_children(parent_iter)
+            while iter_:
+                if self.store.get_value(iter_, COL_IS_GROUP):
+                    gp = self.store.get_value(iter_, COL_GROUP_PATH)
+                    if gp in hit_groups:
+                        tp = self.store.get_path(iter_)
+                        self.tree_view.expand_row(tp, False)
+                    _walk(iter_)
+                iter_ = self.store.iter_next(iter_)
+        _walk(None)
