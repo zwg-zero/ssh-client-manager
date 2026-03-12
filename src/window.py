@@ -224,13 +224,18 @@ class MainWindow(Adw.ApplicationWindow):
         btn_unsplit.set_action_name("win.unsplit")
         header.pack_start(btn_unsplit)
 
-        # Right side: Cluster, Search, Menu
+        # Right side: Cluster, SSH Config, Search, Menu
         btn_cluster = Gtk.ToggleButton()
         btn_cluster.set_icon_name("network-workgroup-symbolic")
         btn_cluster.set_tooltip_text("Cluster Mode - Send to All Terminals")
         btn_cluster.connect("toggled", self._on_cluster_button_toggled)
         self._cluster_button = btn_cluster
         header.pack_end(btn_cluster)
+
+        btn_ssh_config = Gtk.Button(icon_name="document-edit-symbolic")
+        btn_ssh_config.set_tooltip_text("Edit SSH Config File")
+        btn_ssh_config.set_action_name("win.edit-ssh-config")
+        header.pack_end(btn_ssh_config)
 
         # App menu
         menu_button = Gtk.MenuButton()
