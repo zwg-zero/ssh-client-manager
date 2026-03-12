@@ -756,29 +756,57 @@ class MainWindow(Adw.ApplicationWindow):
         dialog = Adw.MessageDialog(
             transient_for=self,
             heading="Duplicate Group",
-            body=f'Enter a name for the new group (copy of "{source_group}"):',
+            body=f'Duplicate group "{source_group}". Optionally find & replace text in connection names and SSH commands.',
         )
         dialog.add_response("cancel", "Cancel")
         dialog.add_response("duplicate", "Duplicate")
         dialog.set_response_appearance("duplicate", Adw.ResponseAppearance.SUGGESTED)
 
-        entry = Gtk.Entry()
-        entry.set_placeholder_text("Target Group Name")
-        entry.set_text(f"{source_group} (copy)")
-        entry.set_margin_start(12)
-        entry.set_margin_end(12)
-        dialog.set_extra_child(entry)
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        box.set_margin_start(12)
+        box.set_margin_end(12)
+
+        # Target group name
+        lbl_group = Gtk.Label(label="New Group Name:", xalign=0)
+        box.append(lbl_group)
+        entry_group = Gtk.Entry()
+        entry_group.set_placeholder_text("Target Group Name")
+        entry_group.set_text(f"{source_group} (copy)")
+        box.append(entry_group)
+
+        # Separator
+        box.append(Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL))
+
+        # Find & Replace section
+        lbl_find = Gtk.Label(label="Find (in name & SSH command):", xalign=0)
+        lbl_find.set_margin_top(4)
+        box.append(lbl_find)
+        entry_find = Gtk.Entry()
+        entry_find.set_placeholder_text("Text to find (leave empty to skip)")
+        box.append(entry_find)
+
+        lbl_replace = Gtk.Label(label="Replace with:", xalign=0)
+        box.append(lbl_replace)
+        entry_replace = Gtk.Entry()
+        entry_replace.set_placeholder_text("Replacement text")
+        box.append(entry_replace)
+
+        dialog.set_extra_child(box)
 
         dialog.connect("response", lambda d, r: self._on_duplicate_group_response(
-            d, r, entry, source_group))
+            d, r, entry_group, entry_find, entry_replace, source_group))
         dialog.present()
 
-    def _on_duplicate_group_response(self, dialog, response, entry, source_group: str):
+    def _on_duplicate_group_response(self, dialog, response, entry_group,
+                                      entry_find, entry_replace, source_group: str):
         """Handle the duplicate group dialog response."""
         if response == "duplicate":
-            target_group = entry.get_text().strip()
+            target_group = entry_group.get_text().strip()
             if not target_group:
                 return
+
+            find_text = entry_find.get_text()
+            replace_text = entry_replace.get_text()
 
             # Check if target group already exists
             existing_groups = self.connection_manager.get_groups()
@@ -801,6 +829,12 @@ class MainWindow(Adw.ApplicationWindow):
                 clone = conn.clone()
                 clone.name = conn.name  # keep original name (clone() appends " (copy)")
                 clone.group = target_group
+
+                # Apply find & replace on connection name and SSH command
+                if find_text:
+                    clone.name = clone.name.replace(find_text, replace_text)
+                    clone.command = clone.command.replace(find_text, replace_text)
+
                 self.connection_manager.add_connection(clone)
 
                 # Copy credentials to the cloned connection
