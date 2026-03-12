@@ -90,7 +90,7 @@ class Sidebar(Gtk.Box):
         btn_expand.add_css_class("flat")
         toolbar.append(btn_expand)
 
-        btn_collapse = Gtk.Button(icon_name="view-less-symbolic")
+        btn_collapse = Gtk.Button(icon_name="view-restore-symbolic")
         btn_collapse.set_tooltip_text("Collapse All")
         btn_collapse.connect("clicked", lambda _: self.tree_view.collapse_all())
         btn_collapse.add_css_class("flat")
