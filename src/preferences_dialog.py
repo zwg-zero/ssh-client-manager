@@ -123,6 +123,11 @@ class PreferencesDialog(Adw.Window):
         self.entry_ssh_config_cmd.set_placeholder_text("vim ~/.ssh/config")
         content.append(self._pref_row("SSH Config Edit Cmd:", self.entry_ssh_config_cmd))
 
+        # AI command
+        self.entry_ia_cmd = Gtk.Entry(text=config["ia_command"])
+        self.entry_ia_cmd.set_placeholder_text("copilot")
+        content.append(self._pref_row("Open AI Command:", self.entry_ia_cmd))
+
         content.append(Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL))
 
         # === Behavior Section ===
@@ -210,6 +215,7 @@ class PreferencesDialog(Adw.Window):
         cfg.set("ssh_keepalive_interval", int(self.spin_keepalive.get_value()))
         cfg.set("ssh_connection_timeout", int(self.spin_timeout.get_value()))
         cfg.set("ssh_config_edit_command", self.entry_ssh_config_cmd.get_text())
+        cfg.set("ia_command", self.entry_ia_cmd.get_text())
         cfg.set("confirm_close_tab", self.switch_confirm_close_tab.get_active())
         cfg.set("confirm_close_window", self.switch_confirm_close_window.get_active())
         cfg.set("show_tab_close_button", self.switch_tab_close_btn.get_active())

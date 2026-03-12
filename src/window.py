@@ -23,6 +23,9 @@ from .cluster_window import ClusterWindow
 from .connection_dialog import ConnectionDialog
 from .preferences_dialog import PreferencesDialog
 
+import os as _os
+_RESOURCES_DIR = _os.path.join(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))), "resources")
+
 
 class MainWindow(Adw.ApplicationWindow):
     """
@@ -67,6 +70,7 @@ class MainWindow(Adw.ApplicationWindow):
         self._cluster_window: ClusterWindow | None = None
 
         self._setup_actions()
+        self._register_custom_icons()
         self._build_ui()
         self._connect_signals()
         self._setup_keyboard_shortcuts()
@@ -74,12 +78,20 @@ class MainWindow(Adw.ApplicationWindow):
         # Add a welcome local terminal on start if no connections open
         GLib.idle_add(self._open_initial_terminal)
 
+    def _register_custom_icons(self):
+        """Add the resources directory to the icon theme search path."""
+        display = self.get_display()
+        if display:
+            icon_theme = Gtk.IconTheme.get_for_display(display)
+            icon_theme.add_search_path(_RESOURCES_DIR)
+
     def _setup_actions(self):
         """Register window-level actions."""
         actions = {
             "new-connection": self._on_new_connection,
             "new-local": self._on_new_local_terminal,
             "edit-ssh-config": self._on_edit_ssh_config,
+            "open-ia": self._on_open_ia,
             "connect-selected": self._on_connect_selected,
             "preferences": self._on_preferences,
             "split-h": self._on_split_horizontal,
@@ -237,6 +249,11 @@ class MainWindow(Adw.ApplicationWindow):
         btn_ssh_config.set_action_name("win.edit-ssh-config")
         header.pack_end(btn_ssh_config)
 
+        btn_ia = Gtk.Button(icon_name="robot-symbolic")
+        btn_ia.set_tooltip_text("Open AI")
+        btn_ia.set_action_name("win.open-ia")
+        header.pack_end(btn_ia)
+
         # App menu
         menu_button = Gtk.MenuButton()
         menu_button.set_icon_name("open-menu-symbolic")
@@ -252,6 +269,7 @@ class MainWindow(Adw.ApplicationWindow):
         section1.append("New Connection", "win.new-connection")
         section1.append("New Local Terminal", "win.new-local")
         section1.append("Edit SSH Config File", "win.edit-ssh-config")
+        section1.append("Open AI", "win.open-ia")
         menu.append_section(None, section1)
 
         section2 = Gio.Menu()
@@ -473,6 +491,18 @@ class MainWindow(Adw.ApplicationWindow):
         # Send the edit command shortly after the shell starts
         GLib.timeout_add(200, lambda: (terminal.feed_child(cmd + "\n"), False)[1])
         self._set_status("Editing SSH config file")
+
+    def _on_open_ia(self, action, param):
+        """Open a local terminal and run the AI command."""
+        cmd = self.config["ia_command"].strip()
+        if not cmd:
+            cmd = "copilot"
+        terminal = TerminalWidget(self.config)
+        shell_cmd = SSHHandler.get_local_shell_command()
+        self.terminal_panel.add_tab(terminal, None, "IA")
+        terminal.spawn_command(shell_cmd)
+        GLib.timeout_add(200, lambda: (terminal.feed_child(cmd + "\n"), False)[1])
+        self._set_status("AI terminal opened")
 
     def _on_connect_selected(self, action, param):
         """Connect to the selected connection in sidebar."""
