@@ -84,17 +84,12 @@ class Sidebar(Gtk.Box):
         btn_add_group.add_css_class("flat")
         toolbar.append(btn_add_group)
 
-        btn_expand = Gtk.Button(icon_name="view-more-symbolic")
-        btn_expand.set_tooltip_text("Expand All")
-        btn_expand.connect("clicked", lambda _: self.tree_view.expand_all())
-        btn_expand.add_css_class("flat")
-        toolbar.append(btn_expand)
-
-        btn_collapse = Gtk.Button(icon_name="view-restore-symbolic")
-        btn_collapse.set_tooltip_text("Collapse All")
-        btn_collapse.connect("clicked", lambda _: self.tree_view.collapse_all())
-        btn_collapse.add_css_class("flat")
-        toolbar.append(btn_collapse)
+        self._btn_toggle_expand = Gtk.Button(icon_name="view-fullscreen-symbolic")
+        self._btn_toggle_expand.set_tooltip_text("Expand All")
+        self._btn_toggle_expand.connect("clicked", self._on_toggle_expand_collapse)
+        self._btn_toggle_expand.add_css_class("flat")
+        self._all_expanded = False
+        toolbar.append(self._btn_toggle_expand)
 
         self.append(toolbar)
 
@@ -459,6 +454,19 @@ class Sidebar(Gtk.Box):
             iter_ = model.iter_next(iter_)
 
     # --- Signal handlers ---
+
+    def _on_toggle_expand_collapse(self, button):
+        """Toggle between expand-all and collapse-all."""
+        if self._all_expanded:
+            self.tree_view.collapse_all()
+            self._all_expanded = False
+            button.set_icon_name("view-fullscreen-symbolic")
+            button.set_tooltip_text("Expand All")
+        else:
+            self.tree_view.expand_all()
+            self._all_expanded = True
+            button.set_icon_name("view-restore-symbolic")
+            button.set_tooltip_text("Collapse All")
 
     def _on_selection_changed(self, selection):
         """Track which connection groups are selected during search."""
