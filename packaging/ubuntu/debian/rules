@@ -5,14 +5,19 @@
 	dh $@ --with python3
 
 override_dh_auto_install:
-	# Install the launcher script
-	install -D -m 755 run.py \
-		debian/ssh-client-manager/usr/bin/ssh-client-manager
-
 	# Install application Python source package
 	install -d debian/ssh-client-manager/usr/lib/ssh-client-manager
 	cp -a src/ debian/ssh-client-manager/usr/lib/ssh-client-manager/src/
 	cp run.py debian/ssh-client-manager/usr/lib/ssh-client-manager/
+	test -d resources && \
+		cp -a resources/ debian/ssh-client-manager/usr/lib/ssh-client-manager/resources/ \
+		|| true
+
+	# Install launcher wrapper script
+	install -d debian/ssh-client-manager/usr/bin
+	printf '#!/bin/bash\nexec python3 /usr/lib/ssh-client-manager/run.py "$$@"\n' \
+		> debian/ssh-client-manager/usr/bin/ssh-client-manager
+	chmod 755 debian/ssh-client-manager/usr/bin/ssh-client-manager
 
 	# Install desktop entry
 	install -D -m 644 \
@@ -33,4 +38,4 @@ override_dh_auto_install:
 		|| true
 
 override_dh_python3:
-	dh_python3 --no-guessing-versions
+	dh_python3 --no-guessing-deps

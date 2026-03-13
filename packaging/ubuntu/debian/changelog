@@ -1,4 +1,4 @@
-ssh-client-manager (1.0.0-1) unstable; urgency=medium
+ssh-client-manager (1.0.0) unstable; urgency=medium
 
   * Initial Debian/Ubuntu packaging.
   * GTK4 + libadwaita + VTE split-terminal SSH manager.

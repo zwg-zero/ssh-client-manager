@@ -5,7 +5,7 @@
 #   chmod +x packaging/ubuntu/build-deb.sh
 #   ./packaging/ubuntu/build-deb.sh
 #
-# Produces: ../ssh-client-manager_1.0.0-1_all.deb
+# Produces: ssh-client-manager_1.0.0_all.deb (in the project root)
 
 set -e
 
@@ -19,7 +19,7 @@ if [ ! -f "run.py" ] || [ ! -d "src" ]; then
 fi
 
 # ── Check required build tools ───────────────────────────────────────────────
-for tool in dpkg-buildpackage debhelper dh-python python3; do
+for tool in dpkg-buildpackage dh dh_python3 python3; do
     if ! command -v "$tool" &>/dev/null; then
         echo "❌ Missing build tool: $tool"
         echo "   Install with:"
@@ -63,6 +63,7 @@ chmod +x "$STAGE_DIR/bin/ssh-client-manager"
 
 # ── Build the .deb ────────────────────────────────────────────────────────────
 echo "🔨 Running dpkg-buildpackage..."
+ORIG_DIR="$(pwd)"
 cd "$STAGE_DIR"
 dpkg-buildpackage -us -uc -b
 
@@ -73,9 +74,8 @@ if [ -z "$DEB_FILE" ]; then
     exit 1
 fi
 
-DEST="$(pwd | sed "s|/ssh-client-manager-$VERSION||")"
-cp "$DEB_FILE" "$DEST/"
-FINAL_DEB="$DEST/$(basename "$DEB_FILE")"
+FINAL_DEB="$ORIG_DIR/$(basename "$DEB_FILE")"
+cp "$DEB_FILE" "$FINAL_DEB"
 
 echo ""
 echo "✅ Build complete!"
