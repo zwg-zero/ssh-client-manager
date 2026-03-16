@@ -162,3 +162,4 @@ Connections are stored in `~/.config/ssh-client-manager/connections.json`.
 ## License
 
 GPL-3.0
+
