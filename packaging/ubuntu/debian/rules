@@ -37,5 +37,12 @@ override_dh_auto_install:
 		debian/ssh-client-manager/usr/share/icons/hicolor/scalable/apps/io.github.ssh-client-manager.svg \
 		|| true
 
+	# Install icon (128x128 PNG)
+	install -d debian/ssh-client-manager/usr/share/icons/hicolor/128x128/apps
+	test -f resources/icon.png && \
+		install -m 644 resources/icon.png \
+		debian/ssh-client-manager/usr/share/icons/hicolor/128x128/apps/io.github.ssh-client-manager.png \
+		|| true
+
 override_dh_python3:
 	dh_python3 --no-guessing-deps

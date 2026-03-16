@@ -18,6 +18,7 @@ BIN_LINK="/usr/local/bin/$APP_NAME"
 DESKTOP_DIR="/usr/share/applications"
 METAINFO_DIR="/usr/share/metainfo"
 ICONS_DIR="/usr/share/icons/hicolor/scalable/apps"
+ICONS_PNG_DIR="/usr/share/icons/hicolor/128x128/apps"
 
 # ── Uninstall mode ────────────────────────────────────────────────────────────
 if [ "${1:-}" = "--uninstall" ]; then
@@ -27,6 +28,7 @@ if [ "${1:-}" = "--uninstall" ]; then
     rm -f  "$DESKTOP_DIR/io.github.ssh-client-manager.desktop"
     rm -f  "$METAINFO_DIR/io.github.ssh-client-manager.metainfo.xml"
     rm -f  "$ICONS_DIR/io.github.ssh-client-manager.svg"
+    rm -f  "$ICONS_PNG_DIR/io.github.ssh-client-manager.png"
     echo "✅ Uninstalled."
     exit 0
 fi
@@ -103,7 +105,7 @@ chmod 755 "$BIN_LINK"
 echo "✅ Launcher installed at $BIN_LINK"
 
 # ── Desktop integration ───────────────────────────────────────────────────────
-install -d "$DESKTOP_DIR" "$METAINFO_DIR" "$ICONS_DIR"
+install -d "$DESKTOP_DIR" "$METAINFO_DIR" "$ICONS_DIR" "$ICONS_PNG_DIR"
 
 install -m 644 \
     "$SCRIPT_DIR/io.github.ssh-client-manager.desktop" \
@@ -117,6 +119,12 @@ if [ -f "$PROJECT_ROOT/resources/ssh-client-manager.svg" ]; then
     install -m 644 \
         "$PROJECT_ROOT/resources/ssh-client-manager.svg" \
         "$ICONS_DIR/io.github.ssh-client-manager.svg"
+fi
+
+if [ -f "$PROJECT_ROOT/resources/icon.png" ]; then
+    install -m 644 \
+        "$PROJECT_ROOT/resources/icon.png" \
+        "$ICONS_PNG_DIR/io.github.ssh-client-manager.png"
 fi
 
 # Refresh icon and MIME caches (best-effort)
