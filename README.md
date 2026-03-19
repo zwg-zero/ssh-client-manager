@@ -159,6 +159,10 @@ Adapted from gnome-connection-manager's approach:
 Settings are stored in `~/.config/ssh-client-manager/config.json`.
 Connections are stored in `~/.config/ssh-client-manager/connections.json`.
 
+## MAC os version
+
+git@github.com:CloudGee/ssh-client-manager.git
+
 ## License
 
 GPL-3.0
