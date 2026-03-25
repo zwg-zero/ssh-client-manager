@@ -161,7 +161,7 @@ Connections are stored in `~/.config/ssh-client-manager/connections.json`.
 
 ## MAC os version
 
-git@github.com:CloudGee/ssh-client-manager.git
+https://github.com/CloudGee/ssh-client-manager
 
 ## License
 
