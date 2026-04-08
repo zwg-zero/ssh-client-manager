@@ -248,6 +248,25 @@ class TerminalPanel(Gtk.Box):
         # Set up panel-level actions
         self._setup_actions()
 
+    def _setup_paned_cursor(self, paned: Gtk.Paned):
+        """Defer setting the open-hand cursor on the paned separator until realized."""
+        GLib.idle_add(self._apply_paned_cursor, paned)
+
+    def _apply_paned_cursor(self, paned: Gtk.Paned) -> bool:
+        # "fleur" (X11 name) = four-directional arrow; fallback chain
+        cursor = Gdk.Cursor.new_from_name(
+            "fleur", Gdk.Cursor.new_from_name(
+                "move", Gdk.Cursor.new_from_name("all-scroll", None)
+            )
+        )
+        child = paned.get_first_child()
+        while child is not None:
+            if child.get_css_name() == "separator":
+                child.set_cursor(cursor)
+                break
+            child = child.get_next_sibling()
+        return False
+
     def _create_notebook(self) -> Gtk.Notebook:
         """Create a new Gtk.Notebook configured for tab management."""
         nb = Gtk.Notebook()
@@ -524,6 +543,7 @@ class TerminalPanel(Gtk.Box):
         paned.set_vexpand(True)
         paned.set_hexpand(True)
         paned.set_wide_handle(True)
+        self._setup_paned_cursor(paned)
 
         # Create new notebook
         new_nb = self._create_notebook()
